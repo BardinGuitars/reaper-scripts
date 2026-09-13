@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="My REAPER Scripts">
-  <category name="MIDI">
-    <reapack name="my_awesome_script.lua" type="script">
+
+<index version="1" name="SSM REAPER Scripts">
+  <category name="MIDI2">
+    <reapack name="SSM_Labor_Safety.lua" type="script">
       <metadata>
-        <description>My Awesome Script</description>
+        <description>SSM_Labor_Safety</description>
       </metadata>
-      <version name="1.0" author="Your Name">
-        <source main="main">https://raw.githubusercontent.com/username/reaper-scripts/main/MIDI/my_awesome_script.lua</source>
+      <version name="1.2" author="Your Name">
+        <source main="main">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.lua</source>
       </version>
     </reapack>
   </category>
