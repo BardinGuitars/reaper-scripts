@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <index version="1" name="SSM">
+	<category name="SSM">
+
     <reapack name="SSM_Labor_Safety.lua" type="script">
       <metadata>
         <description>SSM_Labor_Safety</description>
@@ -21,4 +23,6 @@
         <source main="main">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_vst_audit.lua</source>
       </version>
     </reapack>
+	
+	<category name="SSM">
 </index>
