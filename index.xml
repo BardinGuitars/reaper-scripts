@@ -8,7 +8,7 @@
       <version name="1.2" author="Your Name">
         <source main="main">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.lua</source>
 		<source file="SSM_Labor_Safety.ini">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.ini</source>
-		<source file="Data/toolbar_icons/btn_my_script.png">https://raw.githubusercontent.com/username/reaper-scripts/main/Icons/btn_my_script.png</source>
+		<source file="Data/toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety_REAPER_90x30.png</source>
       </version>
     </reapack>
 </index>
