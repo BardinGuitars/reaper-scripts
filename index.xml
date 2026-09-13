@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="SSM">
+<index version="1">
   <category name="SSM">
 
     <reapack name="SSM_Labor_Safety.lua" type="script">
@@ -7,14 +7,14 @@
         <description>SSM_Labor_Safety</description>
       </metadata>
       <version name="1.2" author="@ssm_metalmix">
-        <!-- Файл скрипта сохранится в: REAPER/Scripts/SSM/SSM_Labor_Safety.lua -->
+        <!-- Сохранится в: REAPER\Scripts\SSM\SSM_Labor_Safety.lua -->
         <source main="main">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.lua</source>
         
-        <!-- Файл настроек сохранится в: REAPER/Scripts/SSM/SSM_Labor_Safety.ini -->
+        <!-- Сохранится в: REAPER\Scripts\SSM\SSM_Labor_Safety.ini -->
         <source file="SSM_Labor_Safety.ini">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.ini</source>
         
-        <!-- Иконка сохранится в: REAPER/Data/toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png -->
-        <source file="../../Data/toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety_REAPER_90x30.png</source>
+        <!-- Выходит из Scripts\SSM\ в корень REAPER и сохраняет в: REAPER\Data\toolbar_icons\ -->
+        <source file="../Data/toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety_REAPER_90x30.png</source>
       </version>
     </reapack>
 
@@ -23,7 +23,7 @@
         <description>SSM_vst_audit</description>
       </metadata>
       <version name="1.0" author="@ssm_metalmix">
-        <!-- Файл скрипта сохранится в: REAPER/Scripts/SSM/SSM_vst_audit.lua -->
+        <!-- Сохранится в: REAPER\Scripts\SSM\SSM_vst_audit.lua -->
         <source main="main">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_vst_audit.lua</source>
       </version>
     </reapack>
