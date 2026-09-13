@@ -1,33 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
-
 <index version="1" name="SSM">
   <category name="SSM">
-
     <reapack name="SSM_Labor_Safety.lua" type="script">
       <metadata>
         <description>SSM_Labor_Safety</description>
       </metadata>
       <version name="1.2" author="@ssm_metalmix">
-        <!-- Сохранится в: REAPER/Scripts/SSM/SSM_Labor_Safety.lua -->
-        <source main="main">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.lua</source>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Labor_Safety.lua -->
+        <source main="main" file="../SSM_Labor_Safety.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.lua</source>
         
-        <!-- Сохранится в: REAPER/Scripts/SSM/SSM_Labor_Safety.ini -->
-        <source file="SSM_Labor_Safety.ini">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.ini</source>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Labor_Safety.ini -->
+        <source file="../SSM_Labor_Safety.ini">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.ini</source>
         
-        <!-- Выходит из Scripts/SSM/ в корень REAPER и сохраняет в: REAPER/Data/toolbar_icons/ -->
-        <source file="../../Data/toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety_REAPER_90x30.png</source>
+        <!-- Ставится в: REAPER/Data/toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png -->
+        <source file="../../../Data/toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety_REAPER_90x30.png</source>
       </version>
     </reapack>
-
+    
     <reapack name="SSM_vst_audit.lua" type="script">
       <metadata>
         <description>SSM_vst_audit</description>
       </metadata>
       <version name="1.0" author="@ssm_metalmix">
-        <!-- Сохранится в: REAPER/Scripts/SSM/SSM_vst_audit.lua -->
-        <source main="main">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_vst_audit.lua</source>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_vst_audit.lua -->
+        <source main="main" file="../SSM_vst_audit.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_vst_audit.lua</source>
       </version>
     </reapack>
-
   </category>
 </index>
