@@ -5,10 +5,20 @@
       <metadata>
         <description>SSM_Labor_Safety</description>
       </metadata>
-      <version name="1.2" author="Your Name">
+      <version name="1.2" author="@ssm_metalmix">
         <source main="main">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.lua</source>
 		<source file="SSM_Labor_Safety.ini">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.ini</source>
 		<source file="Data/toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety_REAPER_90x30.png</source>
+      </version>
+    </reapack>
+	
+	
+	<reapack name="SSM_vst_audit.lua" type="script">
+      <metadata>
+        <description>SSM_vst_audit</description>
+      </metadata>
+      <version name="1.0" author="@ssm_metalmix">
+        <source main="main">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_vst_audit.lua</source>
       </version>
     </reapack>
 </index>
