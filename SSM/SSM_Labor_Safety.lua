@@ -11,6 +11,7 @@
 --   text = "🌐 VK",        url = "https://vk.ru/ssm_metalmix
 -- @changelog
 --   + Релиз
+--   + add icon (SSM_Labor_Safety_REAPER_90x30.png)
 
 
 
