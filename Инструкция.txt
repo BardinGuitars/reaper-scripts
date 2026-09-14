@@ -1,6 +1,6 @@
 https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/index.xml
 
-
+добавить номер версии в окно настроек
 
 Номер версии обязан быть выше предыдущего (ReaPack сравнивает версии).
 Старые версии в index.xml можно оставлять — ReaPack хранит историю.
