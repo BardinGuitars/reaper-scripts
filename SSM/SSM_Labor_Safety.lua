@@ -5,10 +5,10 @@
 --   🎧 Бережём слух и сохраняем продуктивность: Labor Safety v1.0 для REAPER!
 --   Как это работает?
 --   Таймер отслеживает только реальное время воспроизведения и записи (Play/Record). Короткие паузы во --   время работы не обнуляют прогресс, но стоит сделать полноценный перерыв — отсчёт сбросится сам. Как --   только лимит безопасной работы истечёт, REAPER остановит плейбек и напомнит, что пора отдохнуть.
---   📱 Telegram Channel",  url = "https://t.me/bardinssm
---   💬 Telegram",          url = "https://t.me/ssm_metalmix
---   text = "☕ Boosty",    url = "https://boosty.to/boostbg
---   text = "🌐 VK",        url = "https://vk.ru/ssm_metalmix
+--   📱 Telegram Channel",  https://t.me/bardinssm
+--   💬 Telegram",          https://t.me/ssm_metalmix
+--   ☕ Boosty",    https://boosty.to/boostbg
+--   🌐 VK",        https://vk.ru/ssm_metalmix
 -- @changelog
 --   + Релиз
 --   + add icon (SSM_Labor_Safety_REAPER_90x30.png)
