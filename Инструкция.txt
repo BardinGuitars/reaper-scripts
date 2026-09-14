@@ -1,1 +1,7 @@
 https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/index.xml
+
+
+
+Номер версии обязан быть выше предыдущего (ReaPack сравнивает версии).
+Старые версии в index.xml можно оставлять — ReaPack хранит историю.
+Если нужно срочно исправить уже выпущенную версию (без поднятия номера) — используй reapack-index --amend, но лучше всегда поднимать версию.

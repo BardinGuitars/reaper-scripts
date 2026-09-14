@@ -5,7 +5,16 @@
       <metadata>
         <description>SSM_Labor_Safety</description>
       </metadata>
-      <version name="1.2" author="@ssm_metalmix">
+      <version name="1.3" author="@ssm_metalmix">
+	  
+	  <changelog>
+		<![CDATA[
+		+ 1.3: таймер теперь не тикает и не сбрасывается во время записи
+		-- и рендера (оффлайн и в реальном времени) — принудительная
+		-- остановка транспорта больше не может прервать запись/рендер
+		]]>
+		</changelog>
+		
         <!-- Ставится в: REAPER/Scripts/SSM/SSM_Labor_Safety.lua -->
         <source main="main" file="../SSM_Labor_Safety.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.lua</source>
         

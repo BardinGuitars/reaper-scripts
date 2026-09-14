@@ -1,17 +1,20 @@
 -- @description SSM_Labor Safety
--- @version 1.2
+-- @version 1.3
 -- @author @ssm_metalmix
 -- @about
 --   🎧 Бережём слух и сохраняем продуктивность: Labor Safety v1.0 для REAPER!
 --   Как это работает?
 --   Таймер отслеживает только реальное время воспроизведения и записи (Play/Record). Короткие паузы во --   время работы не обнуляют прогресс, но стоит сделать полноценный перерыв — отсчёт сбросится сам. Как --   только лимит безопасной работы истечёт, REAPER остановит плейбек и напомнит, что пора отдохнуть.
---   📱 Telegram Channel",  https://t.me/bardinssm
---   💬 Telegram",          https://t.me/ssm_metalmix
---   ☕ Boosty",    https://boosty.to/boostbg
---   🌐 VK",        https://vk.ru/ssm_metalmix
+--   📱 Telegram Channel",  url = "https://t.me/bardinssm
+--   💬 Telegram",          url = "https://t.me/ssm_metalmix
+--   text = "☕ Boosty",    url = "https://boosty.to/boostbg
+--   text = "🌐 VK",        url = "https://vk.ru/ssm_metalmix
 -- @changelog
 --   + Релиз
 --   + add icon (SSM_Labor_Safety_REAPER_90x30.png)
+--   + 1.3: таймер теперь не тикает и не сбрасывается во время записи
+--     и рендера (оффлайн и в реальном времени) — принудительная
+--     остановка транспорта больше не может прервать запись/рендер
 
 
 
@@ -456,6 +459,21 @@ local function is_playing()
   return (st & 1) == 1 or (st & 4) == 4
 end
 
+-- Идёт запись прямо сейчас? (бит &4 в GetPlayState)
+local function is_recording()
+  local st = reaper.GetPlayState()
+  return (st & 4) == 4
+end
+
+-- Идёт рендер прямо сейчас (оффлайн или в реальном времени)?
+-- idx=0x40000000 — официальный способ получить проект, который сейчас
+-- рендерится (см. EnumProjects в документации ReaScript). Возвращает
+-- ненулевой указатель, только пока рендер активен.
+local function is_rendering()
+  local proj = reaper.EnumProjects(0x40000000)
+  return proj ~= nil
+end
+
 local function stop_transport()
   reaper.Main_OnCommand(1016, 0)
 end
@@ -615,6 +633,17 @@ local function update_timer()
   if not is_running then return end
 
   local now = reaper.time_precise()
+
+  -- Во время записи или рендера таймер полностью замораживается:
+  -- не увеличивается (чтобы не прервать запись/рендер принудительной
+  -- остановкой) и не сбрасывается как от "длинного перерыва". Как
+  -- только запись/рендер закончится, отсчёт продолжится с той же точки.
+  if is_recording() or is_rendering() then
+    last_play_time = now
+    pause_start = nil
+    return
+  end
+
   local playing = is_playing()
 
   if playing then
