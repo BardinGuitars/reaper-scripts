@@ -1,5 +1,5 @@
 -- @description SSM_Labor Safety
--- @version 1.4
+-- @version 1.41
 -- @author @ssm_metalmix
 -- @about
 --   🎧 Бережём слух и сохраняем продуктивность: Labor Safety v1.0 для REAPER!
@@ -11,16 +11,6 @@
 --   🌐 VK - https://vk.ru/ssm_metalmix
 -- @changelog
 --   + Релиз
---   + add icon (SSM_Labor_Safety_REAPER_90x30.png)
---   + 1.3: таймер теперь не тикает и не сбрасывается во время записи
---     и рендера (оффлайн и в реальном времени) — принудительная
---     остановка транспорта больше не может прервать запись/рендер
---   + 1.4
---   Добавил функцию снятия нагрузки на CPU при долгом простое.
---   В настройках есть опция включения и задаётся время простоя (в минутах). Таймер считает только когда --   нет Play/Record и не двигаешь мышь. Перед выгрузкой — обратный отсчёт 30 сек (можно отменить). Скрипт --   запоминает текущую вкладку, открывает пустую — проект разгружается. На пустой вкладке окно с кнопкой --   «Продолжить работу» → возврат к проекту.
---   Бережём и слух, и процессор 🛠
-
-
 
 
 -- ============================================================
@@ -516,6 +506,31 @@ local function reset_idle_state()
   idle_new_proj = nil
 end
 
+-- REAPER (or our script windows) is the foreground app?
+local function is_reaper_focused()
+  if not reaper.JS_Window_GetForeground then return true end
+  local fg = reaper.JS_Window_GetForeground()
+  if not fg then return false end
+  local main = reaper.GetMainHwnd()
+  if main and fg == main then return true end
+  if main and reaper.JS_Window_IsChild and reaper.JS_Window_IsChild(main, fg) then
+    return true
+  end
+  -- Our gfx popups (POPUP style may not be child of main)
+  if reaper.JS_Window_GetTitle then
+    local title = reaper.JS_Window_GetTitle(fg) or ""
+    if title:find("SafetyTimer", 1, true)
+      or title:find("SafetyBreak", 1, true)
+      or title:find("SafetyIdle", 1, true)
+      or title:find("Labor Safety", 1, true)
+      or title:find("Трудовая", 1, true)
+    then
+      return true
+    end
+  end
+  return false
+end
+
 local function get_current_project()
   return reaper.EnumProjects(-1)
 end
@@ -771,7 +786,7 @@ local function update_idle()
 
   local now = reaper.time_precise()
 
-  -- Light check every ~10 s: mouse + transport (negligible CPU)
+  -- Light check every ~10 s (negligible CPU)
   if idle_last_check and (now - idle_last_check) < IDLE_CHECK_INTERVAL then
     return
   end
@@ -780,14 +795,30 @@ local function update_idle()
   local delta = idle_last_check and (now - idle_last_check) or 0
   idle_last_check = now
 
-  -- Any transport activity = user is working
+  -- Transport activity always counts as working (even if focus briefly elsewhere)
   if is_recording() or is_rendering() or is_playing() then
     idle_sec = 0
     idle_last_mx, idle_last_my = reaper.GetMousePosition()
     return
   end
 
-  -- Mouse movement = user is working in REAPER (or at the desk)
+  local focused = is_reaper_focused()
+
+  -- Left REAPER (browser, etc.) → idle accumulates, mouse in other apps is ignored
+  if not focused then
+    if was_idle then
+      idle_sec = idle_sec + delta
+    end
+    if idle_sec >= settings.idle_minutes * 60 then
+      idle_sec = 0
+      idle_last_check = nil
+      idle_last_mx, idle_last_my = nil, nil
+      open_idle_countdown_window()
+    end
+    return
+  end
+
+  -- REAPER is focused: only mouse activity inside REAPER resets idle
   local mx, my = reaper.GetMousePosition()
   if idle_last_mx and idle_last_my then
     local dx = math.abs(mx - idle_last_mx)
@@ -800,16 +831,15 @@ local function update_idle()
   end
   idle_last_mx, idle_last_my = mx, my
 
-  -- Optional: mouse button held = activity (JS extension, already used by script)
   if reaper.JS_Mouse_GetState then
-    local mstate = reaper.JS_Mouse_GetState(1 + 2 + 64) -- L/R/M buttons
+    local mstate = reaper.JS_Mouse_GetState(1 + 2 + 64) -- L/R/M
     if mstate ~= 0 then
       idle_sec = 0
       return
     end
   end
 
-  -- Truly idle: accumulate time
+  -- Focused on REAPER but no mouse activity → idle
   if was_idle then
     idle_sec = idle_sec + delta
   end

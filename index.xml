@@ -5,10 +5,10 @@
       <metadata>
         <description>SSM_Labor_Safety</description>
       </metadata>
-      <version name="1.4" author="@ssm_metalmix">
+      <version name="1.41" author="@ssm_metalmix">
 	  
-	  <changelog>
-		<![CDATA[
+<changelog>
+<![CDATA[
 1.0 Релиз
 1.1 Не помню
 1.2 Мощная оптимизация, теперь все летает.
@@ -16,11 +16,12 @@
 1.4 Добавил функцию снятия нагрузки на CPU при долгом простое.
 В настройках опция включения и время простоя.
 Таймер считает только когда нет Play/Record и не двигается мышка.
-Перед выгрузкой обратный отсчёт 30 сек (можно отменить). Скрипт запоминает текущую вкладку, открывает пустую - проект разгружается
+Перед выгрузкой обратный отсчёт 30 сек (можно отменить). Скрипт запоминает текущую вкладку, открывает пустую - проект разгружается.
 На пустой вкладке окно с кнопкой «Продолжить работу» → возврат к проекту.
 Бережём не только слух, но и процессор 🛠
-		]]>
-		</changelog>
+1.41 Изменена логика простоя.
+]]>
+</changelog>
 		
         <!-- Ставится в: REAPER/Scripts/SSM/SSM_Labor_Safety.lua -->
         <source main="main" file="../SSM_Labor_Safety.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.lua</source>
