@@ -43,5 +43,15 @@
         <source main="main" file="../SSM_vst_audit.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_vst_audit.lua</source>
       </version>
     </reapack>
+
+    <reapack name="SSM_Item_Search.lua" type="script">
+      <metadata>
+        <description>SSM_Item_Search</description>
+      </metadata>
+      <version name="1.0" author="@ssm_metalmix">
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Item_Search.lua -->
+        <source main="main" file="../SSM_Item_Search.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Item_Search.lua</source>
+      </version>
+    </reapack>
   </category>
 </index>
