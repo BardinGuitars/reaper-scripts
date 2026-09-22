@@ -5,8 +5,36 @@
       <metadata>
         <description>SSM_Labor_Safety</description>
       </metadata>
+      <version name="1.5" author="@ssm_metalmix">
+
+<changelog>
+<![CDATA[
+1.0 Релиз
+1.1 Не помню
+1.2 Мощная оптимизация, теперь все летает.
+1.3 Больше не мешает записи и рендеру.
+1.4 Добавил функцию снятия нагрузки на CPU при долгом простое.
+В настройках опция включения и время простоя.
+Таймер считает только когда нет Play/Record и не двигается мышка.
+Перед выгрузкой обратный отсчёт 30 сек (можно отменить). Скрипт запоминает текущую вкладку, открывает пустую - проект разгружается.
+На пустой вкладке окно с кнопкой «Продолжить работу» → возврат к проекту.
+Бережём не только слух, но и процессор 🛠
+1.41 Изменена логика простоя.
+1.5 Снятие нагрузки теперь срабатывает только если в проекте реально есть чем грузить CPU (минимум 10 активных плагинов на треках/мастере) - пустой или лёгкий проект больше не выгружается зря.
+]]>
+</changelog>
+
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Labor_Safety.lua -->
+        <source main="main" file="../SSM_Labor_Safety.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.lua</source>
+
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Labor_Safety.ini -->
+        <source file="../SSM_Labor_Safety.ini">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.ini</source>
+
+        <!-- Ставится в: REAPER/Data/toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png -->
+        <source type="data" file="toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety_REAPER_90x30.png</source>
+      </version>
       <version name="1.41" author="@ssm_metalmix">
-	  
+
 <changelog>
 <![CDATA[
 1.0 Релиз
@@ -22,13 +50,13 @@
 1.41 Изменена логика простоя.
 ]]>
 </changelog>
-		
+
         <!-- Ставится в: REAPER/Scripts/SSM/SSM_Labor_Safety.lua -->
         <source main="main" file="../SSM_Labor_Safety.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.lua</source>
-        
+
         <!-- Ставится в: REAPER/Scripts/SSM/SSM_Labor_Safety.ini -->
         <source file="../SSM_Labor_Safety.ini">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.ini</source>
-        
+
         <!-- Ставится в: REAPER/Data/toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png -->
         <source type="data" file="toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety_REAPER_90x30.png</source>
       </version>

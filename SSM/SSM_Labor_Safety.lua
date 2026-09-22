@@ -1,5 +1,5 @@
 -- @description SSM_Labor Safety
--- @version 1.41
+-- @version 1.5
 -- @author @ssm_metalmix
 -- @about
 --   🎧 Бережём слух и сохраняем продуктивность: Labor Safety v1.0 для REAPER!
@@ -10,7 +10,9 @@
 --   ☕ Boosty - https://boosty.to/boostbg
 --   🌐 VK - https://vk.ru/ssm_metalmix
 -- @changelog
---   + Релиз
+--   1.5 Снятие нагрузки при простое теперь срабатывает только если в проекте
+--   реально есть чем грузить CPU (минимум 10 активных плагинов на треках/мастере) -
+--   пустой или лёгкий проект больше не выгружается зря.
 
 
 -- ============================================================
@@ -81,6 +83,9 @@ local idle_drag_off_x, idle_drag_off_y = 0, 0
 local IDLE_CHECK_INTERVAL = 10   -- activity check every 10 s (mouse + transport; very cheap)
 local IDLE_MOUSE_THRESHOLD = 4   -- pixels of mouse movement = user activity
 local IDLE_COUNTDOWN_SEC = 30    -- countdown before switching to empty tab
+-- Ниже этого числа активных (не в bypass) плагинов на треках считаем, что
+-- проект и так почти не грузит CPU - выгружать пустой/лёгкий проект незачем.
+local IDLE_MIN_ACTIVE_FX = 10
 
 local SETTINGS_W, SETTINGS_H = 440, 580
 local BREAK_W, BREAK_H = 440, 260
@@ -776,6 +781,39 @@ close_idle_window = function()
   end
 end
 
+-- Считает активные (не в bypass) плагины на треках + мастере - грубая, но
+-- дешёвая оценка того, реально ли проект грузит CPU. Плагины в bypass REAPER
+-- не обсчитывает, реальной нагрузки они не дают - в счёт не идут.
+local function count_active_fx()
+  local n = 0
+  local track_count = reaper.CountTracks(0)
+  for ti = 0, track_count - 1 do
+    local track = reaper.GetTrack(0, ti)
+    local fx_count = reaper.TrackFX_GetCount(track)
+    for fi = 0, fx_count - 1 do
+      if reaper.TrackFX_GetEnabled(track, fi) then n = n + 1 end
+    end
+  end
+  local master = reaper.GetMasterTrack(0)
+  local mfx_count = reaper.TrackFX_GetCount(master)
+  for fi = 0, mfx_count - 1 do
+    if reaper.TrackFX_GetEnabled(master, fi) then n = n + 1 end
+  end
+  return n
+end
+
+-- Общая точка "порог простоя достигнут" для обеих веток update_idle ниже -
+-- снятие нагрузки имеет смысл только если в проекте реально есть чем грузить
+-- CPU (см. IDLE_MIN_ACTIVE_FX), иначе просто ждём дальше на следующей проверке.
+local function try_trigger_idle_unload()
+  if idle_sec < settings.idle_minutes * 60 then return end
+  if count_active_fx() < IDLE_MIN_ACTIVE_FX then return end
+  idle_sec = 0
+  idle_last_check = nil
+  idle_last_mx, idle_last_my = nil, nil
+  open_idle_countdown_window()
+end
+
 -- ============================================================
 -- CORE TIMER
 -- ============================================================
@@ -809,12 +847,7 @@ local function update_idle()
     if was_idle then
       idle_sec = idle_sec + delta
     end
-    if idle_sec >= settings.idle_minutes * 60 then
-      idle_sec = 0
-      idle_last_check = nil
-      idle_last_mx, idle_last_my = nil, nil
-      open_idle_countdown_window()
-    end
+    try_trigger_idle_unload()
     return
   end
 
@@ -844,12 +877,7 @@ local function update_idle()
     idle_sec = idle_sec + delta
   end
 
-  if idle_sec >= settings.idle_minutes * 60 then
-    idle_sec = 0
-    idle_last_check = nil
-    idle_last_mx, idle_last_my = nil, nil
-    open_idle_countdown_window()
-  end
+  try_trigger_idle_unload()
 end
 
 local function update_timer()
