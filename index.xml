@@ -5,6 +5,37 @@
       <metadata>
         <description>SSM_Labor_Safety</description>
       </metadata>
+      <version name="1.43" author="@ssm_metalmix">
+
+<changelog>
+<![CDATA[
+1.0 Релиз
+1.1 Не помню
+1.2 Мощная оптимизация, теперь все летает.
+1.3 Больше не мешает записи и рендеру.
+1.4 Добавил функцию снятия нагрузки на CPU при долгом простое.
+В настройках опция включения и время простоя.
+Таймер считает только когда нет Play/Record и не двигается мышка.
+Перед выгрузкой обратный отсчёт 30 сек (можно отменить). Скрипт запоминает текущую вкладку, открывает пустую - проект разгружается.
+На пустой вкладке окно с кнопкой «Продолжить работу» → возврат к проекту.
+Бережём не только слух, но и процессор 🛠
+1.41 Изменена логика простоя.
+1.42 Снятие нагрузки теперь срабатывает только если в проекте реально есть чем грузить CPU - пустой или лёгкий проект больше не выгружается зря.
+1.43 Скрипт больше не падает при запуске без расширения js_ReaScriptAPI.
+Порог «минимум активных плагинов» для снятия нагрузки вынесен в настройки (пункт 8, по умолчанию 10).
+В подсчёт теперь входят Input FX треков, плагины на items и содержимое контейнеров; байпасснутые и офлайн-плагины не считаются.
+]]>
+</changelog>
+
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Labor_Safety.lua -->
+        <source main="main" file="../SSM_Labor_Safety.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.lua</source>
+
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Labor_Safety.ini -->
+        <source file="../SSM_Labor_Safety.ini">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.ini</source>
+
+        <!-- Ставится в: REAPER/Data/toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png -->
+        <source type="data" file="toolbar_icons/SSM_Labor_Safety_REAPER_90x30.png">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety_REAPER_90x30.png</source>
+      </version>
       <version name="1.42" author="@ssm_metalmix">
 
 <changelog>
@@ -66,6 +97,19 @@
       <metadata>
         <description>SSM_vst_audit</description>
       </metadata>
+      <version name="1.1" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.0 Релиз
+1.1 Исправлено распознавание инструментов (VSTi:, VST3i:, CLAPi:) в проектах.
+Сопоставление плагина с проектом больше не зависит от порядка перебора: выбирается самое подходящее (длинное) имя.
+Реальный подсчёт проектов, в которых используется плагин (раньше всегда 1), и числа экземпляров в отчёте.
+Дополнительно сохраняется CSV (vst_reaper_audit.csv) рядом с HTML-отчётом.
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_vst_audit.lua -->
+        <source main="main" file="../SSM_vst_audit.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_vst_audit.lua</source>
+      </version>
       <version name="1.0" author="@ssm_metalmix">
         <!-- Ставится в: REAPER/Scripts/SSM/SSM_vst_audit.lua -->
         <source main="main" file="../SSM_vst_audit.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_vst_audit.lua</source>
@@ -95,6 +139,68 @@
 </changelog>
         <!-- Ставится в: REAPER/Scripts/SSM/SSM_Recent_Cleanup.lua -->
         <source main="main" file="../SSM_Recent_Cleanup.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Recent_Cleanup.lua</source>
+      </version>
+    </reapack>
+
+    <reapack name="SSM_AutoBalancer.lua" type="script">
+      <metadata>
+        <description>SSM_AutoBalancer</description>
+      </metadata>
+      <version name="0.3" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+0.1 Публичная альфа.
+0.2 Названия ищутся только в имени файла, а не в полном пути (папка вроде «Vocals» раньше задевала все items внутри). Короткие обозначения (oh, hh, db, tom, hat, vox) распознаются только целым словом. Правила собраны в таблицу. Если у источника нет файла - берётся имя тейка.
+0.3 Показ плана перед применением (можно отменить). Правила вынесены во внешний файл SSM_AutoBalancer_rules.txt, который создаётся при первом запуске.
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_AutoBalancer.lua -->
+        <source main="main" file="../SSM_AutoBalancer.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_AutoBalancer.lua</source>
+      </version>
+    </reapack>
+
+    <reapack name="SSM_CompareProjects.lua" type="script">
+      <metadata>
+        <description>SSM_CompareProjects</description>
+      </metadata>
+      <version name="1.0" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.0 Релиз
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_CompareProjects.lua -->
+        <source main="main" file="../SSM_CompareProjects.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_CompareProjects.lua</source>
+      </version>
+    </reapack>
+
+    <reapack name="SSM_Del_Numbers_Name.lua" type="script">
+      <metadata>
+        <description>SSM_Del_Numbers_Name</description>
+      </metadata>
+      <version name="1.0" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.0 Релиз
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Del_Numbers_Name.lua -->
+        <source main="main" file="../SSM_Del_Numbers_Name.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Del_Numbers_Name.lua</source>
+      </version>
+    </reapack>
+
+    <reapack name="SSM_Unused_Plugins_Remover.lua" type="script">
+      <metadata>
+        <description>SSM_Unused_Plugins_Remover</description>
+      </metadata>
+      <version name="1.0" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.0 Релиз
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Unused_Plugins_Remover.lua -->
+        <source main="main" file="../SSM_Unused_Plugins_Remover.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Unused_Plugins_Remover.lua</source>
       </version>
     </reapack>
   </category>

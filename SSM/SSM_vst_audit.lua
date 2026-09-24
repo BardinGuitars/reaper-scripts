@@ -1,5 +1,5 @@
 -- @description SSM_vst_audit
--- @version 1.0
+-- @version 1.1
 -- @author @ssm_metalmix
 -- @about
 --  Чтобы не вспоминать, какие плагины нужны, а какие нет, перед удалением сделал вот такой скрипт для
@@ -10,7 +10,12 @@
 --  вк https://vk.ru/ssm_metalmix
 --  бусти https://boosty.to/boostbg
 -- @changelog
---   + Релиз
+--   1.1 Исправлено распознавание инструментов (VSTi:, VST3i:, CLAPi:) в проектах.
+--   Сопоставление плагина с проектом больше не зависит от порядка перебора:
+--   выбирается самое подходящее (длинное) имя. Реальный подсчёт проектов, в
+--   которых используется плагин (раньше всегда 1), и число экземпляров в отчёте.
+--   Дополнительно сохраняется CSV (vst_reaper_audit.csv) рядом с HTML-отчётом.
+--   1.0 Релиз
 
 
 
@@ -33,7 +38,7 @@ if reaper.JS_Dialog_BrowseForFolder then
     end
 else
     -- Fallback без js_ReaScriptAPI
-    local retval, path = reaper.GetUserInputs("Папка проектов", 1, "Путь к папке с .rpp (extrawidth=300):", last_path)
+    local retval, path = reaper.GetUserInputs("Папка проектов", 1, "Путь к папке с .rpp:,extrawidth=300", last_path)
     if retval and path and path ~= "" then
         projects_dir = path
     end
@@ -106,8 +111,9 @@ local function normalize_plugin_name(name)
     name = name:lower()
     
     -- Убираем типичные префиксы
-    name = name:gsub("^vst3?:%s*", "")
-    name = name:gsub("^clap:%s*", "")
+    -- REAPER пишет "VST3:", "VSTi:", "VST3i:", "CLAP:", "CLAPi:" (i - инструмент)
+    name = name:gsub("^vst3?i?:%s*", "")
+    name = name:gsub("^clapi?:%s*", "")
     name = name:gsub("^js:%s*", "")
     name = name:gsub("^au:%s*", "")
     
@@ -188,7 +194,8 @@ local function scan_plugin_dir(dir)
                             clean_name = raw_name,
                             path = join_path(dir, filename),
                             project_count = 0,
-                            instance_count = 0
+                            instance_count = 0,
+                            projects = {}
                         }
                     end
                 end
@@ -216,7 +223,8 @@ local function scan_plugin_dir(dir)
                     clean_name = raw_name,
                     path = join_path(dir, subfolder),
                     project_count = 0,
-                    instance_count = 0
+                    instance_count = 0,
+                    projects = {}
                 }
             end
         else
@@ -234,7 +242,24 @@ end
 -- 4. Сканирование проектов
 -------------------------------------------------
 local total_projects = 0
-local processed = 0
+
+-- Находит установленный плагин по имени из проекта. Точное совпадение, иначе
+-- частичное (с защитой от слишком коротких имён): выбирается САМОЕ ДЛИННОЕ
+-- подходящее имя (при равенстве - по алфавиту), а не первое попавшееся из
+-- pairs() - иначе "Kontakt" и "Kontakt 7" путались бы от запуска к запуску.
+local function find_installed(norm)
+    if installed[norm] then return installed[norm] end
+    if #norm < 4 then return nil end
+    local best_key
+    for key in pairs(installed) do
+        if #key >= 4 and (norm:find(key, 1, true) or key:find(norm, 1, true)) then
+            if not best_key or #key > #best_key or (#key == #best_key and key < best_key) then
+                best_key = key
+            end
+        end
+    end
+    return best_key and installed[best_key] or nil
+end
 
 local function scan_projects(dir)
     if not dir or dir == "" then return end
@@ -255,34 +280,23 @@ local function scan_projects(dir)
                 local content = f:read("*all")
                 f:close()
 
-                -- Ищем VST и CLAP
-                for plugin_raw in content:gmatch('<VST%d?%s+"([^"]+)"') do
+                -- Ищем VST и CLAP; каждый плагин считаем и по экземплярам, и по
+                -- проектам (в скольких разных проектах он встретился)
+                local seen_here = {}
+                local function count_hit(plugin_raw)
                     local norm = normalize_plugin_name(plugin_raw)
-                    if norm ~= "" then
-                        -- Сначала точное совпадение
-                        if installed[norm] then
-                            installed[norm].instance_count = installed[norm].instance_count + 1
-                        else
-                            -- Частичное совпадение (с защитой от слишком коротких имён)
-                            for key, data in pairs(installed) do
-                                if #key >= 4 and #norm >= 4 then
-                                    if norm:find(key, 1, true) or key:find(norm, 1, true) then
-                                        data.instance_count = data.instance_count + 1
-                                        break
-                                    end
-                                end
-                            end
-                        end
+                    if norm == "" then return end
+                    local data = find_installed(norm)
+                    if not data then return end
+                    data.instance_count = data.instance_count + 1
+                    if not seen_here[data] then
+                        seen_here[data] = true
+                        data.project_count = data.project_count + 1
+                        data.projects[#data.projects + 1] = filename
                     end
                 end
-
-                -- CLAP (если есть)
-                for plugin_raw in content:gmatch('<CLAP%s+"([^"]+)"') do
-                    local norm = normalize_plugin_name(plugin_raw)
-                    if installed[norm] then
-                        installed[norm].instance_count = installed[norm].instance_count + 1
-                    end
-                end
+                for plugin_raw in content:gmatch('<VST%d?%s+"([^"]+)"') do count_hit(plugin_raw) end
+                for plugin_raw in content:gmatch('<CLAP%s+"([^"]+)"') do count_hit(plugin_raw) end
             end
         end
         i = i + 1
@@ -302,16 +316,6 @@ reaper.ClearConsole()
 reaper.ShowConsoleMsg("Сканирование проектов...\n")
 scan_projects(projects_dir)
 
--- Подсчёт уникальных проектов, где плагин использовался
--- (упрощённо: если instance_count > 0 — считаем как использованный)
-for _, data in pairs(installed) do
-    if data.instance_count > 0 then
-        data.project_count = 1   -- минимальная отметка "использовался"
-        -- Для более точного подсчёта проектов нужно хранить set проектов,
-        -- но это сильно усложняет код. Оставляем instance_count.
-    end
-end
-
 -------------------------------------------------
 -- 5. Запись HTML-отчёта
 -------------------------------------------------
@@ -320,6 +324,13 @@ local report_path = join_path(report_dir, "vst_reaper_audit.html")
 
 if get_os() == "win" then
     report_path = report_path:gsub("/", "\\")
+end
+
+local function plural(n, one, few, many)
+    local m10, m100 = n % 10, n % 100
+    if m10 == 1 and m100 ~= 11 then return one end
+    if m10 >= 2 and m10 <= 4 and (m100 < 10 or m100 >= 20) then return few end
+    return many
 end
 
 -- Разбиваем на используемые / неиспользуемые
@@ -335,10 +346,34 @@ for _, data in pairs(installed) do
 end
 
 table.sort(unused_list, function(a, b) return a.clean_name:lower() < b.clean_name:lower() end)
-table.sort(used_list, function(a, b) return a.instance_count > b.instance_count end)
+table.sort(used_list, function(a, b)
+    if a.project_count ~= b.project_count then return a.project_count > b.project_count end
+    if a.instance_count ~= b.instance_count then return a.instance_count > b.instance_count end
+    return a.clean_name:lower() < b.clean_name:lower()
+end)
 
 local unused_count = #unused_list
 local installed_count = unused_count + #used_list
+
+-- CSV для Excel/Google Sheets: разделитель ";", UTF-8 с BOM
+do
+    local function csv(s) return '"' .. tostring(s):gsub('"', '""') .. '"' end
+    local csv_path = join_path(report_dir, "vst_reaper_audit.csv")
+    if get_os() == "win" then csv_path = csv_path:gsub("/", "\\") end
+    local cf = io.open(csv_path, "wb")
+    if cf then
+        cf:write("\239\187\191")
+        cf:write("plugin;status;projects;instances;path\r\n")
+        for _, data in ipairs(used_list) do
+            cf:write(table.concat({ csv(data.clean_name), "used", data.project_count, data.instance_count, csv(data.path) }, ";"), "\r\n")
+        end
+        for _, data in ipairs(unused_list) do
+            cf:write(table.concat({ csv(data.clean_name), "unused", 0, 0, csv(data.path) }, ";"), "\r\n")
+        end
+        cf:close()
+        reaper.ShowConsoleMsg("CSV: " .. csv_path .. "\n")
+    end
+end
 
 local out = io.open(report_path, "w")
 if not out then
@@ -527,7 +562,9 @@ if #used_list == 0 then
 else
     for _, data in ipairs(used_list) do
         out:write('      <div class="row"><span>' .. html_escape(data.clean_name) ..
-            '</span><span class="count">' .. data.instance_count .. '</span></div>\n')
+            '</span><span class="count">' .. data.project_count .. ' ' ..
+            plural(data.project_count, "проект", "проекта", "проектов") .. ' · ' ..
+            data.instance_count .. ' экз.</span></div>\n')
     end
 end
 

@@ -1,15 +1,26 @@
 -- @description SSM_Labor Safety
--- @version 1.42
+-- @version 1.43
 -- @author @ssm_metalmix
 -- @about
 --   🎧 Бережём слух и сохраняем продуктивность: Labor Safety v1.0 для REAPER!
 --   Как это работает?
---   Таймер отслеживает только реальное время воспроизведения и записи (Play/Record). Короткие паузы во --   время работы не обнуляют прогресс, но стоит сделать полноценный перерыв — отсчёт сбросится сам. Как --   только лимит безопасной работы истечёт, REAPER остановит плейбек и напомнит, что пора отдохнуть.
+--   Таймер отслеживает только реальное время воспроизведения и записи (Play/Record).
+--   Короткие паузы во время работы не обнуляют прогресс, но стоит сделать полноценный
+--   перерыв — отсчёт сбросится сам. Как только лимит безопасной работы истечёт, REAPER
+--   остановит плейбек и напомнит, что пора отдохнуть.
+--   Опционально: снятие нагрузки на CPU при долгом простое (проект выгружается на
+--   пустую вкладку, если в нём достаточно активных плагинов - порог в настройках).
+--   Рекомендуется расширение js_ReaScriptAPI (ReaPack → ReaTeam Extensions): без него
+--   окна показываются с обычной рамкой, а простой не различает фокус на REAPER.
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 --   ☕ Boosty - https://boosty.to/boostbg
 --   🌐 VK - https://vk.ru/ssm_metalmix
 -- @changelog
+--   1.43 Скрипт больше не падает при запуске без расширения js_ReaScriptAPI.
+--   Порог «минимум активных плагинов» для снятия нагрузки вынесен в настройки
+--   (пункт 8, по умолчанию 10). В подсчёт теперь входят Input FX треков, плагины
+--   на items и содержимое контейнеров; байпасснутые и офлайн-плагины не считаются.
 --   1.42 Снятие нагрузки при простое теперь срабатывает только если в проекте
 --   реально есть чем грузить CPU (минимум 10 активных плагинов на треках/мастере) -
 --   пустой или лёгкий проект больше не выгружается зря.
@@ -38,6 +49,7 @@ local defaults = {
   break_y          = 260,
   idle_cpu_save    = 0,
   idle_minutes     = 30,
+  idle_min_fx      = 10,
 }
 
 local settings = {}
@@ -83,11 +95,8 @@ local idle_drag_off_x, idle_drag_off_y = 0, 0
 local IDLE_CHECK_INTERVAL = 10   -- activity check every 10 s (mouse + transport; very cheap)
 local IDLE_MOUSE_THRESHOLD = 4   -- pixels of mouse movement = user activity
 local IDLE_COUNTDOWN_SEC = 30    -- countdown before switching to empty tab
--- Ниже этого числа активных (не в bypass) плагинов на треках считаем, что
--- проект и так почти не грузит CPU - выгружать пустой/лёгкий проект незачем.
-local IDLE_MIN_ACTIVE_FX = 10
 
-local SETTINGS_W, SETTINGS_H = 440, 580
+local SETTINGS_W, SETTINGS_H = 440, 624
 local BREAK_W, BREAK_H = 440, 260
 local IDLE_W, IDLE_H = 440, 260
 local MIN_TIMER_W, MIN_TIMER_H = 80, 36
@@ -165,9 +174,21 @@ local langs = {}
 local T = {}
 local T_fallback = {}
 
+-- Строки, добавленные после первого релиза: INI создаётся один раз и у уже
+-- установивших их нет - берём встроенные значения (ключ = имя строки в INI).
+local BUILTIN_TR = {
+  RU = { row_idle_min_fx = "8. Мин. активных плагинов для снятия нагрузки" },
+  EN = { row_idle_min_fx = "8. Min. active plugins to unload project" },
+}
+
 local function tr(key)
   local v = T[key]
   if v == nil then v = T_fallback[key] end
+  if v == nil then
+    local lang = langs[(settings.lang or 0) + 1]
+    local builtin = (lang and BUILTIN_TR[lang.code]) or BUILTIN_TR.EN
+    v = builtin[key] or BUILTIN_TR.EN[key]
+  end
   if v == nil then return key end
   return v
 end
@@ -339,6 +360,7 @@ local function save_ini()
   out[#out + 1] = "break_y="          .. tostring(math.floor(settings.break_y))
   out[#out + 1] = "idle_cpu_save="    .. tostring(settings.idle_cpu_save)
   out[#out + 1] = "idle_minutes="     .. tostring(settings.idle_minutes)
+  out[#out + 1] = "idle_min_fx="      .. tostring(settings.idle_min_fx)
   out[#out + 1] = ""
 
   for _, sec_name in ipairs(order_in) do
@@ -379,6 +401,7 @@ break_x=400
 break_y=260
 idle_cpu_save=0
 idle_minutes=30
+idle_min_fx=10
 
 [RU]
 langName=Русский
@@ -391,6 +414,7 @@ row_show_float=4. Показывать плавающее окно таймер�
 row_language=5. Язык интерфейса
 row_idle_cpu=6. Снимать нагрузку при простое
 row_idle_minutes=7. Время простоя до снятия нагрузки (мин)
+row_idle_min_fx=8. Мин. активных плагинов для снятия нагрузки
 link_header=Автор / Поддержка:
 
 btn_start=START
@@ -431,6 +455,7 @@ row_show_float=4. Show floating timer window
 row_language=5. Interface language
 row_idle_cpu=6. Unload project on long idle
 row_idle_minutes=7. Idle time before unload (min)
+row_idle_min_fx=8. Min. active plugins to unload project
 link_header=Author / Support:
 btn_start=START
 edit_dialog_title=Value
@@ -673,7 +698,7 @@ open_timer_window = function()
            math.floor(settings.timer_x), math.floor(settings.timer_y))
 
   reaper.defer(function()
-    local hwnd = reaper.JS_Window_Find("SafetyTimer", true)
+    local hwnd = reaper.JS_Window_Find and reaper.JS_Window_Find("SafetyTimer", true)
     if hwnd then
       reaper.JS_Window_SetStyle(hwnd, "POPUP")
       reaper.JS_WindowMessage_Send(hwnd, "WM_NCCALCSIZE", 0, 0, 0, 0)
@@ -697,7 +722,7 @@ local function open_break_window()
            math.floor(settings.break_x), math.floor(settings.break_y))
 
   reaper.defer(function()
-    local hwnd = reaper.JS_Window_Find("SafetyBreak", true)
+    local hwnd = reaper.JS_Window_Find and reaper.JS_Window_Find("SafetyBreak", true)
     if hwnd then
       reaper.JS_Window_SetStyle(hwnd, "POPUP")
       reaper.JS_WindowMessage_Send(hwnd, "WM_NCCALCSIZE", 0, 0, 0, 0)
@@ -720,7 +745,7 @@ open_idle_countdown_window = function()
            math.floor(settings.break_x), math.floor(settings.break_y))
 
   reaper.defer(function()
-    local hwnd = reaper.JS_Window_Find("SafetyIdleCountdown", true)
+    local hwnd = reaper.JS_Window_Find and reaper.JS_Window_Find("SafetyIdleCountdown", true)
     if hwnd then
       reaper.JS_Window_SetStyle(hwnd, "POPUP")
       reaper.JS_WindowMessage_Send(hwnd, "WM_NCCALCSIZE", 0, 0, 0, 0)
@@ -741,7 +766,7 @@ open_idle_restore_window = function()
            math.floor(settings.break_x), math.floor(settings.break_y))
 
   reaper.defer(function()
-    local hwnd = reaper.JS_Window_Find("SafetyIdleRestore", true)
+    local hwnd = reaper.JS_Window_Find and reaper.JS_Window_Find("SafetyIdleRestore", true)
     if hwnd then
       reaper.JS_Window_SetStyle(hwnd, "POPUP")
       reaper.JS_WindowMessage_Send(hwnd, "WM_NCCALCSIZE", 0, 0, 0, 0)
@@ -781,33 +806,68 @@ close_idle_window = function()
   end
 end
 
--- Считает активные (не в bypass) плагины на треках + мастере - грубая, но
--- дешёвая оценка того, реально ли проект грузит CPU. Плагины в bypass REAPER
--- не обсчитывает, реальной нагрузки они не дают - в счёт не идут.
-local function count_active_fx()
-  local n = 0
-  local track_count = reaper.CountTracks(0)
-  for ti = 0, track_count - 1 do
-    local track = reaper.GetTrack(0, ti)
-    local fx_count = reaper.TrackFX_GetCount(track)
-    for fi = 0, fx_count - 1 do
-      if reaper.TrackFX_GetEnabled(track, fi) then n = n + 1 end
+-- Сколько "рабочих" плагинов в одном FX: bypass и офлайн REAPER не обсчитывает,
+-- нагрузки они не дают. Контейнер сам ничего не стоит - считаем его содержимое.
+local function count_fx_at(track, idx, depth)
+  if not reaper.TrackFX_GetEnabled(track, idx) or reaper.TrackFX_GetOffline(track, idx) then
+    return 0
+  end
+  if depth < 4 then
+    local ok, s = reaper.TrackFX_GetNamedConfigParm(track, idx, "container_count")
+    local cnt = ok and tonumber(s) or 0
+    if cnt > 0 then
+      local total = 0
+      for c = 0, cnt - 1 do
+        local ok2, id = reaper.TrackFX_GetNamedConfigParm(track, idx, "container_item." .. c)
+        local child = ok2 and tonumber(id)
+        if child then total = total + count_fx_at(track, child, depth + 1) end
+      end
+      return total
     end
   end
-  local master = reaper.GetMasterTrack(0)
-  local mfx_count = reaper.TrackFX_GetCount(master)
-  for fi = 0, mfx_count - 1 do
-    if reaper.TrackFX_GetEnabled(master, fi) then n = n + 1 end
+  return 1
+end
+
+-- Считает активные плагины проекта: FX-цепочки треков и мастера, Input FX
+-- треков и FX на активных тейках items - грубая, но дешёвая оценка того,
+-- реально ли проект грузит CPU.
+local function count_active_fx()
+  local n = 0
+
+  local function count_track(track, with_input_fx)
+    for i = 0, reaper.TrackFX_GetCount(track) - 1 do
+      n = n + count_fx_at(track, i, 0)
+    end
+    if with_input_fx then
+      for i = 0, reaper.TrackFX_GetRecCount(track) - 1 do
+        n = n + count_fx_at(track, 0x1000000 + i, 0)
+      end
+    end
+  end
+
+  for ti = 0, reaper.CountTracks(0) - 1 do
+    count_track(reaper.GetTrack(0, ti), true)
+  end
+  -- у мастера "Input FX" - это глобальный мониторинг, к проекту не относится
+  count_track(reaper.GetMasterTrack(0), false)
+
+  for ii = 0, reaper.CountMediaItems(0) - 1 do
+    local take = reaper.GetActiveTake(reaper.GetMediaItem(0, ii))
+    if take then
+      for fi = 0, reaper.TakeFX_GetCount(take) - 1 do
+        if reaper.TakeFX_GetEnabled(take, fi) then n = n + 1 end
+      end
+    end
   end
   return n
 end
 
 -- Общая точка "порог простоя достигнут" для обеих веток update_idle ниже -
 -- снятие нагрузки имеет смысл только если в проекте реально есть чем грузить
--- CPU (см. IDLE_MIN_ACTIVE_FX), иначе просто ждём дальше на следующей проверке.
+-- CPU (settings.idle_min_fx), иначе просто ждём дальше на следующей проверке.
 local function try_trigger_idle_unload()
   if idle_sec < settings.idle_minutes * 60 then return end
-  if count_active_fx() < IDLE_MIN_ACTIVE_FX then return end
+  if count_active_fx() < settings.idle_min_fx then return end
   idle_sec = 0
   idle_last_check = nil
   idle_last_mx, idle_last_my = nil, nil
@@ -1516,8 +1576,25 @@ local function draw_settings_window()
     settings.idle_minutes = edit_number("row_idle_minutes", settings.idle_minutes, 5, 240)
   end
 
+  -- Idle: min. active plugins
+  local fx_y = idle_min_y + row_h
+  draw_round_rect(left - 8, fx_y - 6, w - 32, 36, col.panel, 1, 6)
+  draw_text(tr("row_idle_min_fx"), left, fx_y + 4, col.text)
+
+  local fvx = w - left - val_w
+  local fx_hov = mouse_in(fvx, fx_y - 2, val_w, 28)
+  draw_round_rect(fvx, fx_y - 2, val_w, 28, fx_hov and col.accent or col.input_bg, 1, 5)
+  set_color(col.border)
+  gfx.rect(fvx, fx_y - 2, val_w, 28, 0)
+  local fx_val_str = tostring(settings.idle_min_fx)
+  local ftw = gfx.measurestr(fx_val_str)
+  draw_text(fx_val_str, fvx + (val_w - ftw) / 2, fx_y + 4, col.text)
+  if fx_hov and (gfx.mouse_cap & 1) == 1 and gfx.mouse_cap ~= last_mouse_cap then
+    settings.idle_min_fx = edit_number("row_idle_min_fx", settings.idle_min_fx, 1, 500)
+  end
+
   -- Language
-  local lang_y = idle_min_y + row_h
+  local lang_y = fx_y + row_h
   draw_round_rect(left - 8, lang_y - 6, w - 32, 36, col.panel, 1, 6)
   draw_text(tr("row_language"), left, lang_y + 4, col.text)
 
