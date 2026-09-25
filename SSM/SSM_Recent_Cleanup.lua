@@ -1,5 +1,5 @@
 -- @description SSM_Recent_Cleanup
--- @version 1.2
+-- @version 1.3
 -- @author @ssm_metalmix
 -- @about
 --   🧹 Чистка списка Recent projects. В окне виден весь список:
@@ -12,6 +12,8 @@
 --   сортировка по возрастанию (для даты и размера - по убыванию), повторным
 --   меняется направление. Дата изменения доступна при установленном
 --   расширении js_ReaScriptAPI; выбранная сортировка запоминается.
+--   Кнопка «Открыть выбранный» открывает отмеченный галочкой проект в новой
+--   вкладке REAPER (когда отмечен ровно один существующий проект).
 --   Файлы проектов не трогаются - убираются только записи из списка.
 --   Перед первым изменением делается резервная копия reaper.ini
 --   (reaper.ini.ssm_bak). Список в меню REAPER обновится после перезапуска.
@@ -19,15 +21,19 @@
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
 --   1.0 Релиз: автоматическое удаление несуществующих проектов.
+--   1.3 Крупнее шрифт и элементы окна. Кнопка «Открыть выбранный» в нижнем
+--   ряду - открывает отмеченный проект в новой вкладке.
 --   1.2 Ряд кнопок сортировки списка (как в REAPER / имя / папка / дата /
 --   размер / не найденные), в строках показываются дата и размер файла.
 --   1.1 Окно со списком: ручной выбор ненужных проектов галочками.
 
 local TITLE = "SSM Recent Cleanup"
-local WIN_W, WIN_H = 720, 600
-local HEAD_H, FOOT_H, ROW_H = 100, 108, 28
+local WIN_W, WIN_H = 860, 660
+local HEAD_H, FOOT_H, ROW_H = 112, 116, 34
 local EXT_SECTION = "SSM_RecentCleanup"
-local SIZE_W, DATE_W = 70, 92
+local SIZE_W, DATE_W = 84, 108
+local F_ROW, F_TITLE, F_SMALL, F_BTN, F_SORT = 17, 20, 15, 17, 16
+local CB = 20 -- сторона чекбокса
 
 local ini_path = reaper.get_ini_file()
 
@@ -276,6 +282,14 @@ local function remove_where(pred)
     removed, #items)
 end
 
+-- Открывает проект в НОВОЙ вкладке (действие 40859), чтобы не трогать текущий
+-- проект; "noprompt:" - без вопроса о сохранении пустой вкладки.
+local function open_project(it)
+  reaper.Main_OnCommand(40859, 0)
+  reaper.Main_openProject("noprompt:" .. it.path)
+  status = "Открыт в новой вкладке: " .. (it.path:match("([^\\/]+)$") or it.path)
+end
+
 ----------------------------------------------------------------------
 -- Отрисовка
 ----------------------------------------------------------------------
@@ -310,17 +324,22 @@ local function draw_button(x, y, w, h, label, enabled, click, color)
   local c = (not enabled) and col.btn_off or (hov and col.btn_hover or (color or col.btn))
   set_color(c); gfx.rect(x, y, w, h, 1)
   set_color(col.border); gfx.rect(x, y, w, h, 0)
-  gfx.setfont(1, "Arial", 15)
+  local size = F_BTN
+  gfx.setfont(1, "Arial", size)
+  while size > 12 and gfx.measurestr(label) > w - 12 do
+    size = size - 1
+    gfx.setfont(1, "Arial", size)
+  end
   local tw = gfx.measurestr(label)
-  draw_text(label, x + (w - tw) / 2, y + (h - 15) / 2 - 1, enabled and col.text or col.dim)
+  draw_text(label, x + (w - tw) / 2, y + (h - size) / 2 - 1, enabled and col.text or col.dim)
   return hov and click
 end
 
 local function draw_checkbox(x, y, checked)
-  set_color(checked and col.accent or col.bg); gfx.rect(x, y, 18, 18, 1)
-  set_color(col.border); gfx.rect(x, y, 18, 18, 0)
+  set_color(checked and col.accent or col.bg); gfx.rect(x, y, CB, CB, 1)
+  set_color(col.border); gfx.rect(x, y, CB, CB, 0)
   if checked then
-    gfx.setfont(1, "Arial", 15)
+    gfx.setfont(1, "Arial", F_ROW)
     draw_text("✓", x + 3, y, col.text)
   end
 end
@@ -345,8 +364,8 @@ local function draw()
   scroll = math.max(0, math.min(scroll, max_scroll))
 
   -- строки списка (шапка и подвал перекрывают выступающие части)
-  gfx.setfont(1, "Arial", 15)
-  local text_right = w - 24
+  gfx.setfont(1, "Arial", F_ROW)
+  local text_right = w - 26
   for i, it in ipairs(items) do
     local ry = list_y + (i - 1) * ROW_H - scroll
     if ry + ROW_H > list_y and ry < list_y + list_h then
@@ -358,35 +377,36 @@ local function draw()
         if click then it.checked = not it.checked end
       end
 
-      draw_checkbox(16, ry + 5, it.checked)
+      draw_checkbox(16, ry + (ROW_H - CB) / 2, it.checked)
 
+      local small_y = ry + (ROW_H - F_SMALL) / 2
       local tag_w = 0
       if not it.exists then
         local tag = "файл не найден"
-        gfx.setfont(1, "Arial", 13)
+        gfx.setfont(1, "Arial", F_SMALL)
         tag_w = gfx.measurestr(tag) + 12
-        draw_text(tag, text_right - tag_w + 12, ry + 7, col.danger)
-        gfx.setfont(1, "Arial", 15)
+        draw_text(tag, text_right - tag_w + 12, small_y, col.danger)
+        gfx.setfont(1, "Arial", F_ROW)
       end
       local right_w = tag_w
       if it.exists then
         right_w = SIZE_W + (has_dates and DATE_W or 0) + 6
-        gfx.setfont(1, "Arial", 13)
+        gfx.setfont(1, "Arial", F_SMALL)
         local sz = fmt_size(it.size)
-        draw_text(sz, text_right - gfx.measurestr(sz), ry + 7, col.dim)
+        draw_text(sz, text_right - gfx.measurestr(sz), small_y, col.dim)
         if has_dates then
           local dt = fmt_date(it.mtime)
-          draw_text(dt, text_right - SIZE_W - gfx.measurestr(dt), ry + 7, col.dim)
+          draw_text(dt, text_right - SIZE_W - gfx.measurestr(dt), small_y, col.dim)
         end
-        gfx.setfont(1, "Arial", 15)
+        gfx.setfont(1, "Arial", F_ROW)
       end
-      local avail = text_right - 46 - right_w
-      draw_text(clip_tail(it.path, avail), 46, ry + 5, it.exists and col.text or col.dim)
+      local avail = text_right - 50 - right_w
+      draw_text(clip_tail(it.path, avail), 50, ry + (ROW_H - F_ROW) / 2 - 1, it.exists and col.text or col.dim)
     end
   end
 
   if #items == 0 then
-    draw_text("Список Recent projects пуст.", 16, list_y + 16, col.dim)
+    draw_text("Список Recent projects пуст.", 16, list_y + 18, col.dim)
   end
 
   -- полоса прокрутки
@@ -399,12 +419,13 @@ local function draw()
   -- шапка
   set_color(col.panel); gfx.rect(0, 0, w, HEAD_H, 1)
   set_color(col.border); gfx.rect(0, HEAD_H - 1, w, 1, 1)
-  gfx.setfont(1, "Arial", 17)
-  draw_text(string.format("Недавние проекты: %d  (не найдено: %d)", #items, count_missing()), 16, 10, col.text)
-  gfx.setfont(1, "Arial", 13)
-  draw_text("Отметьте галочками ненужные проекты и нажмите «Удалить выбранные». Файлы на диске не удаляются.",
-    16, 36, col.dim)
+  gfx.setfont(1, "Arial", F_TITLE)
+  draw_text(string.format("Недавние проекты: %d  (не найдено: %d)", #items, count_missing()), 16, 9, col.text)
+  gfx.setfont(1, "Arial", F_SMALL)
+  draw_text("Отметьте галочкой проект: откройте его или удалите из списка. Файлы на диске не удаляются.",
+    16, 40, col.dim)
   if not has_js_stat then
+    gfx.setfont(1, "Arial", 14)
     local note = "Дата изменения: нужен js_ReaScriptAPI"
     draw_text(note, w - 16 - gfx.measurestr(note), 12, col.dim)
   end
@@ -413,7 +434,7 @@ local function draw()
   do
     local n, gap = #SORT_KEYS, 6
     local bw2 = (w - 32 - gap * (n - 1)) / n
-    local bh2, by2 = 28, HEAD_H - 28 - 8
+    local bh2, by2 = 34, HEAD_H - 34 - 8
     local clicked_key
     for i, sk in ipairs(SORT_KEYS) do
       local active = (sk.key == sort_key)
@@ -425,7 +446,7 @@ local function draw()
       local c = (not enabled) and col.btn_off or (active and col.accent or (hov and col.btn_hover or col.btn))
       set_color(c); gfx.rect(x, by2, bw2, bh2, 1)
       set_color(col.border); gfx.rect(x, by2, bw2, bh2, 0)
-      local size = 15
+      local size = F_SORT
       gfx.setfont(1, "Arial", size)
       while size > 11 and gfx.measurestr(label) > bw2 - 8 do
         size = size - 1
@@ -443,20 +464,28 @@ local function draw()
   set_color(col.panel); gfx.rect(0, foot_y, w, FOOT_H, 1)
   set_color(col.border); gfx.rect(0, foot_y, w, 1, 1)
 
-  gfx.setfont(1, "Arial", 13)
-  draw_text(clip_tail(status, w - 32), 16, foot_y + 12, col.dim)
+  gfx.setfont(1, "Arial", F_SMALL)
+  draw_text(clip_tail(status, w - 32), 16, foot_y + 13, col.dim)
 
   local n_missing, n_checked = count_missing(), count_checked()
-  local bh, by, gap = 40, foot_y + 50, 10
-  local bw = (w - 32 - gap * 2) / 3
+  local only_checked
+  if n_checked == 1 then
+    for _, it in ipairs(items) do if it.checked then only_checked = it end end
+  end
+  local can_open = only_checked ~= nil and only_checked.exists
+  local bh, by, gap = 46, foot_y + 52, 10
+  local bw = (w - 32 - gap * 3) / 4
   local act_auto = draw_button(16, by, bw, bh,
     string.format("Убрать несуществующие (%d)", n_missing), n_missing > 0, click)
-  local act_del = draw_button(16 + bw + gap, by, bw, bh,
+  local act_open = draw_button(16 + (bw + gap), by, bw, bh, "Открыть выбранный", can_open, click, col.accent)
+  local act_del = draw_button(16 + (bw + gap) * 2, by, bw, bh,
     string.format("Удалить выбранные (%d)", n_checked), n_checked > 0, click, col.btn_danger)
-  local act_close = draw_button(16 + (bw + gap) * 2, by, bw, bh, "Закрыть", true, click)
+  local act_close = draw_button(16 + (bw + gap) * 3, by, bw, bh, "Закрыть", true, click)
 
   if act_auto then
     remove_where(function(path) return path == "" or not reaper.file_exists(path) end)
+  elseif act_open then
+    open_project(only_checked)
   elseif act_del then
     local doomed = {}
     for _, it in ipairs(items) do if it.checked then doomed[it.path] = true end end

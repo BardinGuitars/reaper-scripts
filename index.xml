@@ -130,6 +130,18 @@
       <metadata>
         <description>SSM_Recent_Cleanup</description>
       </metadata>
+      <version name="1.3" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.0 Релиз: автоматическое удаление несуществующих проектов из Recent projects.
+1.1 Окно со списком: ручной выбор ненужных проектов галочками (в том числе существующих) и кнопка «Удалить выбранные».
+1.2 Ряд кнопок сортировки списка: как в REAPER, по имени, по папке, по дате изменения (нужен js_ReaScriptAPI), по размеру, «не найденные». В строках показываются дата и размер файла, выбранная сортировка запоминается.
+1.3 Крупнее шрифт и элементы окна. Кнопка «Открыть выбранный» в нижнем ряду открывает отмеченный галочкой проект в новой вкладке REAPER.
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Recent_Cleanup.lua -->
+        <source main="main" file="../SSM_Recent_Cleanup.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Recent_Cleanup.lua</source>
+      </version>
       <version name="1.2" author="@ssm_metalmix">
 <changelog>
 <![CDATA[
