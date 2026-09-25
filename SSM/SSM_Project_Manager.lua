@@ -1,8 +1,9 @@
--- @description SSM_Recent_Cleanup
--- @version 1.3
+-- @description SSM_Project_Manager
+-- @version 2.0
 -- @author @ssm_metalmix
 -- @about
---   🧹 Чистка списка Recent projects. В окне виден весь список:
+--   🗂 Менеджер недавних проектов (Recent projects): открытие, сортировка и
+--   чистка списка. В окне виден весь список:
 --     - кнопка «Убрать несуществующие» - автоматически удаляет проекты,
 --       файлов которых нет на диске (удалены, перемещены, отключён диск);
 --     - галочками можно отметить любые ненужные проекты (в том числе
@@ -20,6 +21,9 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   2.0 Скрипт переименован: SSM_Recent_Cleanup -> SSM_Project_Manager (новый
+--   пакет в ReaPack, старый SSM_Recent_Cleanup больше не обновляется).
+--   Сохранённая сортировка подхватывается из старого скрипта.
 --   1.0 Релиз: автоматическое удаление несуществующих проектов.
 --   1.3 Крупнее шрифт и элементы окна. Кнопка «Открыть выбранный» в нижнем
 --   ряду - открывает отмеченный проект в новой вкладке.
@@ -27,10 +31,11 @@
 --   размер / не найденные), в строках показываются дата и размер файла.
 --   1.1 Окно со списком: ручной выбор ненужных проектов галочками.
 
-local TITLE = "SSM Recent Cleanup"
+local TITLE = "SSM Project Manager"
 local WIN_W, WIN_H = 860, 660
 local HEAD_H, FOOT_H, ROW_H = 112, 116, 34
-local EXT_SECTION = "SSM_RecentCleanup"
+local EXT_SECTION = "SSM_ProjectManager"
+local OLD_EXT_SECTION = "SSM_RecentCleanup" -- настройки прежнего названия скрипта
 local SIZE_W, DATE_W = 84, 108
 local F_ROW, F_TITLE, F_SMALL, F_BTN, F_SORT = 17, 20, 15, 17, 16
 local CB = 20 -- сторона чекбокса
@@ -131,9 +136,11 @@ local SORT_KEYS = {
 
 local sort_key, sort_desc = "order", false
 do
-  local k = reaper.GetExtState(EXT_SECTION, "sort_key")
+  local section = EXT_SECTION
+  if reaper.GetExtState(section, "sort_key") == "" then section = OLD_EXT_SECTION end
+  local k = reaper.GetExtState(section, "sort_key")
   for _, sk in ipairs(SORT_KEYS) do if sk.key == k then sort_key = k end end
-  sort_desc = reaper.GetExtState(EXT_SECTION, "sort_desc") == "1"
+  sort_desc = reaper.GetExtState(section, "sort_desc") == "1"
 end
 
 local has_js_stat = reaper.JS_File_Stat ~= nil
