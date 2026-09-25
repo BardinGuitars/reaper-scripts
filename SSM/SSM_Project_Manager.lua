@@ -1,5 +1,5 @@
 -- @description SSM_Project_Manager
--- @version 3.0
+-- @version 3.1
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
@@ -52,6 +52,8 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.1 Полосу прокрутки справа можно тянуть мышью, клик по дорожке переносит
+--   ползунок в это место.
 --   3.0 Режим «Все проекты»: поиск по всем .rpp из выбранных папок. Кнопка
 --   «Папки» (добавить/убрать папку, пересканировать, исключения Backups и
 --   .rpp-bak), индекс запоминается. Переключатель «Недавние | Все проекты»
@@ -1001,6 +1003,7 @@ local function apply_drag(kind, start, dx)
   end
 end
 
+local sb_drag = nil                -- пока тащат ползунок прокрутки: смещение мыши от его верха
 local col_drag = nil               -- { kind, x0, start } пока разделитель тащат
 local last_div_click_t = -1e9
 
@@ -1259,6 +1262,31 @@ local function draw()
   end
   scroll = math.max(0, math.min(scroll, max_scroll))
 
+  -- Полоса прокрутки: ползунок тащится мышью, клик по дорожке переносит ползунок
+  -- в это место (и его можно сразу тащить дальше). Зона захвата - правые 14 пикселей списка.
+  local thumb_h, thumb_y = 0, list_y
+  if max_scroll > 0 then
+    thumb_h = math.max(24, list_h * list_h / total_h)
+    local travel = list_h - thumb_h
+    thumb_y = list_y + travel * (scroll / max_scroll)
+    if sb_drag then
+      if down then
+        thumb_y = math.max(list_y, math.min(gfx.mouse_y - sb_drag, list_y + travel))
+        scroll = (thumb_y - list_y) / travel * max_scroll
+      else
+        sb_drag = nil
+      end
+    elseif lclick and gfx.mouse_x >= w - 14 and gfx.mouse_y >= list_y and gfx.mouse_y < list_y + list_h then
+      if gfx.mouse_y < thumb_y or gfx.mouse_y > thumb_y + thumb_h then
+        thumb_y = math.max(list_y, math.min(gfx.mouse_y - thumb_h / 2, list_y + travel))
+        scroll = (thumb_y - list_y) / travel * max_scroll
+      end
+      sb_drag = gfx.mouse_y - thumb_y
+    end
+  else
+    sb_drag = nil
+  end
+
   -- строки списка (шапка и панели перекрывают выступающие части)
   gfx.setfont(1, "Arial", F_ROW)
   local open_now, fav_now
@@ -1327,9 +1355,9 @@ local function draw()
 
   -- полоса прокрутки
   if max_scroll > 0 then
-    local thumb_h = math.max(24, list_h * list_h / total_h)
-    local thumb_y = list_y + (list_h - thumb_h) * (scroll / max_scroll)
-    set_color(col.border); gfx.rect(w - 10, thumb_y, 6, thumb_h, 1)
+    local hot = sb_drag ~= nil or mouse_in(w - 14, thumb_y, 14, thumb_h)
+    set_color(sb_drag and col.accent or (hot and col.dim or col.border))
+    gfx.rect(w - 11, thumb_y, 8, thumb_h, 1)
   end
 
   -- заголовки колонок с разделителями
