@@ -1,5 +1,5 @@
 -- @description SSM_Recent_Cleanup
--- @version 1.1
+-- @version 1.2
 -- @author @ssm_metalmix
 -- @about
 --   🧹 Чистка списка Recent projects. В окне виден весь список:
@@ -7,6 +7,11 @@
 --       файлов которых нет на диске (удалены, перемещены, отключён диск);
 --     - галочками можно отметить любые ненужные проекты (в том числе
 --       существующие) и нажать «Удалить выбранные».
+--   Сверху ряд кнопок сортировки списка: как в REAPER, по имени файла, по
+--   папке, по дате изменения, по размеру, «не найденные» - первым нажатием
+--   сортировка по возрастанию (для даты и размера - по убыванию), повторным
+--   меняется направление. Дата изменения доступна при установленном
+--   расширении js_ReaScriptAPI; выбранная сортировка запоминается.
 --   Файлы проектов не трогаются - убираются только записи из списка.
 --   Перед первым изменением делается резервная копия reaper.ini
 --   (reaper.ini.ssm_bak). Список в меню REAPER обновится после перезапуска.
@@ -14,11 +19,15 @@
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
 --   1.0 Релиз: автоматическое удаление несуществующих проектов.
+--   1.2 Ряд кнопок сортировки списка (как в REAPER / имя / папка / дата /
+--   размер / не найденные), в строках показываются дата и размер файла.
 --   1.1 Окно со списком: ручной выбор ненужных проектов галочками.
 
 local TITLE = "SSM Recent Cleanup"
-local WIN_W, WIN_H = 720, 560
-local HEAD_H, FOOT_H, ROW_H = 64, 108, 28
+local WIN_W, WIN_H = 720, 600
+local HEAD_H, FOOT_H, ROW_H = 100, 108, 28
+local EXT_SECTION = "SSM_RecentCleanup"
+local SIZE_W, DATE_W = 70, 92
 
 local ini_path = reaper.get_ini_file()
 
@@ -98,23 +107,133 @@ end
 ----------------------------------------------------------------------
 -- Состояние окна
 ----------------------------------------------------------------------
-local items = {}
-local scroll = 0
 local status = ""
 local backup_done = false
 local last_cap = 0
+
+----------------------------------------------------------------------
+-- Сортировка списка (только отображение - порядок в reaper.ini не меняется)
+----------------------------------------------------------------------
+local SORT_KEYS = {
+  { key = "order",   label = "Как в REAPER", default_desc = false },
+  { key = "name",    label = "Имя",          default_desc = false },
+  { key = "folder",  label = "Папка",        default_desc = false },
+  { key = "date",    label = "Дата",         default_desc = true },  -- сначала новые
+  { key = "size",    label = "Размер",       default_desc = true },  -- сначала большие
+  { key = "missing", label = "Не найденные", default_desc = false }, -- сначала пропавшие
+}
+
+local sort_key, sort_desc = "order", false
+do
+  local k = reaper.GetExtState(EXT_SECTION, "sort_key")
+  for _, sk in ipairs(SORT_KEYS) do if sk.key == k then sort_key = k end end
+  sort_desc = reaper.GetExtState(EXT_SECTION, "sort_desc") == "1"
+end
+
+local has_js_stat = reaper.JS_File_Stat ~= nil
+local has_dates = false
+
+-- Нижний регистр с кириллицей (string.lower понимает только ASCII)
+local function fold(s)
+  local ok, res = pcall(function()
+    local out = {}
+    for _, cp in utf8.codes(s) do
+      if cp >= 0x41 and cp <= 0x5A then cp = cp + 32
+      elseif cp >= 0x410 and cp <= 0x42F then cp = cp + 32
+      elseif cp == 0x401 then cp = 0x451 end
+      out[#out + 1] = utf8.char(cp)
+    end
+    return table.concat(out)
+  end)
+  return ok and res or s:lower()
+end
+
+-- Размер и (при наличии js_ReaScriptAPI) дата изменения "ГГГГ.ММ.ДД чч:мм:сс"
+local function file_info(path)
+  if has_js_stat then
+    local rv, size, _, mtime = reaper.JS_File_Stat(path)
+    if rv == 0 and type(mtime) == "string" and mtime:match("^%d%d%d%d%.%d%d%.%d%d") then
+      return size, mtime
+    end
+  end
+  local f = io.open(path, "rb")
+  if f then
+    local size = f:seek("end")
+    f:close()
+    return size, nil
+  end
+  return nil, nil
+end
+
+local function fmt_size(bytes)
+  if not bytes then return "" end
+  if bytes < 1024 then return string.format("%d Б", bytes) end
+  if bytes < 1024 * 1024 then return string.format("%.0f КБ", bytes / 1024) end
+  return string.format("%.1f МБ", bytes / 1024 / 1024)
+end
+
+local function fmt_date(mtime)
+  if not mtime then return "" end
+  return (mtime:sub(1, 10):gsub("%.", "-"))
+end
+
+local function compare_items(a, b)
+  local va, vb
+  if sort_key == "name" then va, vb = a.name_l, b.name_l
+  elseif sort_key == "folder" then va, vb = a.dir_l, b.dir_l
+  elseif sort_key == "date" then va, vb = a.mtime, b.mtime
+  elseif sort_key == "size" then va, vb = a.size, b.size
+  elseif sort_key == "missing" then va, vb = a.exists and 1 or 0, b.exists and 1 or 0
+  else va, vb = a.ord, b.ord end
+  -- нет данных (nil) - всегда в конец, независимо от направления
+  if va == nil or vb == nil then
+    if va == nil and vb == nil then return a.ord < b.ord end
+    return vb == nil
+  end
+  if va == vb then return a.ord < b.ord end
+  if sort_desc then return va > vb end
+  return va < vb
+end
+
+local items = {}
+local scroll = 0
+
+local function apply_sort()
+  table.sort(items, compare_items)
+end
+
+local function set_sort(key)
+  if key == sort_key then
+    sort_desc = not sort_desc
+  else
+    sort_key = key
+    for _, sk in ipairs(SORT_KEYS) do if sk.key == key then sort_desc = sk.default_desc end end
+  end
+  reaper.SetExtState(EXT_SECTION, "sort_key", sort_key, true)
+  reaper.SetExtState(EXT_SECTION, "sort_desc", sort_desc and "1" or "0", true)
+  apply_sort()
+  scroll = 0
+end
 
 local function reload()
   local st, err = load_ini()
   if not st then return false, err end
   items = {}
+  has_dates = false
   for _, r in ipairs(st.recents) do
+    local path = r.path
+    local exists = path ~= "" and reaper.file_exists(path)
+    local name = path:match("([^\\/]+)$") or path
+    local dir = path:sub(1, #path - #name)
+    local size, mtime
+    if exists then size, mtime = file_info(path) end
+    if mtime then has_dates = true end
     items[#items + 1] = {
-      path = r.path,
-      exists = r.path ~= "" and reaper.file_exists(r.path),
-      checked = false,
+      path = path, exists = exists, checked = false, ord = #items + 1,
+      name_l = fold(name), dir_l = fold(dir), size = size, mtime = mtime,
     }
   end
+  apply_sort()
   return true
 end
 
@@ -249,7 +368,19 @@ local function draw()
         draw_text(tag, text_right - tag_w + 12, ry + 7, col.danger)
         gfx.setfont(1, "Arial", 15)
       end
-      local avail = text_right - 46 - tag_w
+      local right_w = tag_w
+      if it.exists then
+        right_w = SIZE_W + (has_dates and DATE_W or 0) + 6
+        gfx.setfont(1, "Arial", 13)
+        local sz = fmt_size(it.size)
+        draw_text(sz, text_right - gfx.measurestr(sz), ry + 7, col.dim)
+        if has_dates then
+          local dt = fmt_date(it.mtime)
+          draw_text(dt, text_right - SIZE_W - gfx.measurestr(dt), ry + 7, col.dim)
+        end
+        gfx.setfont(1, "Arial", 15)
+      end
+      local avail = text_right - 46 - right_w
       draw_text(clip_tail(it.path, avail), 46, ry + 5, it.exists and col.text or col.dim)
     end
   end
@@ -272,7 +403,40 @@ local function draw()
   draw_text(string.format("Недавние проекты: %d  (не найдено: %d)", #items, count_missing()), 16, 10, col.text)
   gfx.setfont(1, "Arial", 13)
   draw_text("Отметьте галочками ненужные проекты и нажмите «Удалить выбранные». Файлы на диске не удаляются.",
-    16, 38, col.dim)
+    16, 36, col.dim)
+  if not has_js_stat then
+    local note = "Дата изменения: нужен js_ReaScriptAPI"
+    draw_text(note, w - 16 - gfx.measurestr(note), 12, col.dim)
+  end
+
+  -- ряд кнопок сортировки
+  do
+    local n, gap = #SORT_KEYS, 6
+    local bw2 = (w - 32 - gap * (n - 1)) / n
+    local bh2, by2 = 28, HEAD_H - 28 - 8
+    local clicked_key
+    for i, sk in ipairs(SORT_KEYS) do
+      local active = (sk.key == sort_key)
+      local enabled = not (sk.key == "date" and not has_dates)
+      local label = sk.label
+      if active and (sk.key ~= "order" or sort_desc) then label = label .. (sort_desc and " ▼" or " ▲") end
+      local x = 16 + (i - 1) * (bw2 + gap)
+      local hov = enabled and mouse_in(x, by2, bw2, bh2)
+      local c = (not enabled) and col.btn_off or (active and col.accent or (hov and col.btn_hover or col.btn))
+      set_color(c); gfx.rect(x, by2, bw2, bh2, 1)
+      set_color(col.border); gfx.rect(x, by2, bw2, bh2, 0)
+      local size = 15
+      gfx.setfont(1, "Arial", size)
+      while size > 11 and gfx.measurestr(label) > bw2 - 8 do
+        size = size - 1
+        gfx.setfont(1, "Arial", size)
+      end
+      draw_text(label, x + (bw2 - gfx.measurestr(label)) / 2, by2 + (bh2 - size) / 2 - 1,
+        enabled and col.text or col.dim)
+      if hov and click then clicked_key = sk.key end
+    end
+    if clicked_key then set_sort(clicked_key) end
+  end
 
   -- подвал
   local foot_y = h - FOOT_H
