@@ -1,5 +1,5 @@
 -- @description SSM_Project_Manager
--- @version 2.0
+-- @version 2.1
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер недавних проектов (Recent projects): открытие, сортировка и
@@ -13,6 +13,10 @@
 --   сортировка по возрастанию (для даты и размера - по убыванию), повторным
 --   меняется направление. Дата изменения доступна при установленном
 --   расширении js_ReaScriptAPI; выбранная сортировка запоминается.
+--   Строка поиска над списком: просто печатайте - список сузится до проектов,
+--   в имени или пути которых есть все введённые слова (регистр не важен).
+--   Esc очищает поиск, повторный Esc закрывает окно. Кнопки внизу работают
+--   только с тем, что видно в списке.
 --   Кнопка «Открыть выбранный» открывает отмеченный галочкой проект в новой
 --   вкладке REAPER (когда отмечен ровно один существующий проект).
 --   Файлы проектов не трогаются - убираются только записи из списка.
@@ -21,6 +25,7 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   2.1 Строка поиска по имени и пути (несколько слов - все должны совпасть).
 --   2.0 Скрипт переименован: SSM_Recent_Cleanup -> SSM_Project_Manager (новый
 --   пакет в ReaPack, старый SSM_Recent_Cleanup больше не обновляется).
 --   Сохранённая сортировка подхватывается из старого скрипта.
@@ -32,8 +37,9 @@
 --   1.1 Окно со списком: ручной выбор ненужных проектов галочками.
 
 local TITLE = "SSM Project Manager"
-local WIN_W, WIN_H = 860, 660
-local HEAD_H, FOOT_H, ROW_H = 112, 116, 34
+local WIN_W, WIN_H = 860, 700
+local HEAD_H, FOOT_H, ROW_H = 152, 116, 34
+local SEARCH_Y, SEARCH_H = 66, 34
 local EXT_SECTION = "SSM_ProjectManager"
 local OLD_EXT_SECTION = "SSM_RecentCleanup" -- настройки прежнего названия скрипта
 local SIZE_W, DATE_W = 84, 108
@@ -119,6 +125,7 @@ end
 -- Состояние окна
 ----------------------------------------------------------------------
 local status = ""
+local query = ""
 local backup_done = false
 local last_cap = 0
 
@@ -209,10 +216,40 @@ local function compare_items(a, b)
 end
 
 local items = {}
+local view = {} -- то, что видно в списке: items после сортировки и поиска
 local scroll = 0
+
+-- Слова запроса без учёта регистра; проект подходит, если в его пути есть все
+local function matches(it, words)
+  for _, wd in ipairs(words) do
+    if not it.path_l:find(wd, 1, true) then return false end
+  end
+  return true
+end
+
+local function refresh_view()
+  local words = {}
+  for wd in fold(query):gmatch("%S+") do words[#words + 1] = wd end
+  view = {}
+  for _, it in ipairs(items) do
+    if matches(it, words) then view[#view + 1] = it end
+  end
+end
 
 local function apply_sort()
   table.sort(items, compare_items)
+  refresh_view()
+end
+
+-- Скрытые поиском проекты теряют галочку: кнопки внизу действуют только на видимое
+local function set_query(q)
+  if q == query then return end
+  query = q
+  refresh_view()
+  local visible = {}
+  for _, it in ipairs(view) do visible[it] = true end
+  for _, it in ipairs(items) do if not visible[it] then it.checked = false end end
+  scroll = 0
 end
 
 local function set_sort(key)
@@ -243,7 +280,7 @@ local function reload()
     if mtime then has_dates = true end
     items[#items + 1] = {
       path = path, exists = exists, checked = false, ord = #items + 1,
-      name_l = fold(name), dir_l = fold(dir), size = size, mtime = mtime,
+      name_l = fold(name), dir_l = fold(dir), path_l = fold(path), size = size, mtime = mtime,
     }
   end
   apply_sort()
@@ -252,13 +289,13 @@ end
 
 local function count_missing()
   local n = 0
-  for _, it in ipairs(items) do if not it.exists then n = n + 1 end end
+  for _, it in ipairs(view) do if not it.exists then n = n + 1 end end
   return n
 end
 
 local function count_checked()
   local n = 0
-  for _, it in ipairs(items) do if it.checked then n = n + 1 end end
+  for _, it in ipairs(view) do if it.checked then n = n + 1 end end
   return n
 end
 
@@ -295,6 +332,20 @@ local function open_project(it)
   reaper.Main_OnCommand(40859, 0)
   reaper.Main_openProject("noprompt:" .. it.path)
   status = "Открыт в новой вкладке: " .. (it.path:match("([^\\/]+)$") or it.path)
+end
+
+-- Символ, введённый в строку поиска (код из gfx.getchar). Служебные клавиши
+-- gfx отдаёт большими кодами - их отсекает верхняя граница Unicode.
+local function type_char(ch)
+  if ch == 8 then -- Backspace: убрать последний символ (в UTF-8 это до 4 байт)
+    local off = utf8.offset(query, -1)
+    set_query(off and query:sub(1, off - 1) or "")
+  elseif ch == 22 and reaper.CF_GetClipboard then -- Ctrl+V (нужен SWS)
+    local clip = (reaper.CF_GetClipboard("") or ""):gsub("%c+", " ")
+    set_query(query .. clip)
+  elseif ch >= 32 and ch ~= 127 and ch <= 0x10FFFF then
+    set_query(query .. utf8.char(ch))
+  end
 end
 
 ----------------------------------------------------------------------
@@ -361,7 +412,7 @@ local function draw()
 
   local list_y = HEAD_H
   local list_h = math.max(60, h - HEAD_H - FOOT_H)
-  local total_h = #items * ROW_H
+  local total_h = #view * ROW_H
   local max_scroll = math.max(0, total_h - list_h)
 
   if gfx.mouse_wheel ~= 0 then
@@ -373,7 +424,7 @@ local function draw()
   -- строки списка (шапка и подвал перекрывают выступающие части)
   gfx.setfont(1, "Arial", F_ROW)
   local text_right = w - 26
-  for i, it in ipairs(items) do
+  for i, it in ipairs(view) do
     local ry = list_y + (i - 1) * ROW_H - scroll
     if ry + ROW_H > list_y and ry < list_y + list_h then
       if i % 2 == 0 then set_color(col.row_alt); gfx.rect(0, ry, w, ROW_H, 1) end
@@ -414,6 +465,8 @@ local function draw()
 
   if #items == 0 then
     draw_text("Список Recent projects пуст.", 16, list_y + 18, col.dim)
+  elseif #view == 0 then
+    draw_text("Ничего не найдено по запросу «" .. query .. "».", 16, list_y + 18, col.dim)
   end
 
   -- полоса прокрутки
@@ -427,7 +480,11 @@ local function draw()
   set_color(col.panel); gfx.rect(0, 0, w, HEAD_H, 1)
   set_color(col.border); gfx.rect(0, HEAD_H - 1, w, 1, 1)
   gfx.setfont(1, "Arial", F_TITLE)
-  draw_text(string.format("Недавние проекты: %d  (не найдено: %d)", #items, count_missing()), 16, 9, col.text)
+  if query == "" then
+    draw_text(string.format("Недавние проекты: %d  (не найдено: %d)", #items, count_missing()), 16, 9, col.text)
+  else
+    draw_text(string.format("Найдено: %d из %d  (не найдено: %d)", #view, #items, count_missing()), 16, 9, col.text)
+  end
   gfx.setfont(1, "Arial", F_SMALL)
   draw_text("Отметьте галочкой проект: откройте его или удалите из списка. Файлы на диске не удаляются.",
     16, 40, col.dim)
@@ -435,6 +492,33 @@ local function draw()
     gfx.setfont(1, "Arial", 14)
     local note = "Дата изменения: нужен js_ReaScriptAPI"
     draw_text(note, w - 16 - gfx.measurestr(note), 12, col.dim)
+  end
+
+  -- строка поиска: ввод идёт сюда всегда (см. loop), справа кнопка очистки
+  do
+    local sx, sw = 16, w - 32
+    set_color(col.bg); gfx.rect(sx, SEARCH_Y, sw, SEARCH_H, 1)
+    set_color(query ~= "" and col.accent or col.border); gfx.rect(sx, SEARCH_Y, sw, SEARCH_H, 0)
+    gfx.setfont(1, "Arial", F_ROW)
+    local ty = SEARCH_Y + (SEARCH_H - F_ROW) / 2 - 1
+    local clear_w = SEARCH_H
+    local shown = ""
+    if query == "" then
+      draw_text("Поиск по имени и пути: начните печатать…", sx + 10, ty, col.dim)
+    else
+      shown = clip_tail(query, sw - clear_w - 20)
+      draw_text(shown, sx + 10, ty, col.text)
+      local cx = sx + sw - clear_w
+      local hov = mouse_in(cx, SEARCH_Y, clear_w, SEARCH_H)
+      set_color(hov and col.btn_hover or col.btn); gfx.rect(cx + 1, SEARCH_Y + 1, clear_w - 2, SEARCH_H - 2, 1)
+      draw_text("✕", cx + (clear_w - gfx.measurestr("✕")) / 2, ty, col.text)
+      if hov and click then set_query("") end
+    end
+    -- мигающий курсор в конце введённого текста
+    if math.floor(reaper.time_precise() * 2) % 2 == 0 then
+      set_color(col.text)
+      gfx.rect(sx + 10 + gfx.measurestr(shown) + 1, SEARCH_Y + 7, 1, SEARCH_H - 14, 1)
+    end
   end
 
   -- ряд кнопок сортировки
@@ -477,7 +561,7 @@ local function draw()
   local n_missing, n_checked = count_missing(), count_checked()
   local only_checked
   if n_checked == 1 then
-    for _, it in ipairs(items) do if it.checked then only_checked = it end end
+    for _, it in ipairs(view) do if it.checked then only_checked = it end end
   end
   local can_open = only_checked ~= nil and only_checked.exists
   local bh, by, gap = 46, foot_y + 52, 10
@@ -490,12 +574,14 @@ local function draw()
   local act_close = draw_button(16 + (bw + gap) * 3, by, bw, bh, "Закрыть", true, click)
 
   if act_auto then
-    remove_where(function(path) return path == "" or not reaper.file_exists(path) end)
+    local doomed = {}
+    for _, it in ipairs(view) do if not it.exists then doomed[it.path] = true end end
+    remove_where(function(path) return doomed[path] == true end)
   elseif act_open then
     open_project(only_checked)
   elseif act_del then
     local doomed = {}
-    for _, it in ipairs(items) do if it.checked then doomed[it.path] = true end end
+    for _, it in ipairs(view) do if it.checked then doomed[it.path] = true end end
     remove_where(function(path) return doomed[path] == true end)
   elseif act_close then
     return "close"
@@ -513,8 +599,18 @@ end
 gfx.init(TITLE, WIN_W, WIN_H)
 
 local function loop()
-  local ch = gfx.getchar()
-  if ch == 27 or ch < 0 then gfx.quit(); return end
+  -- за кадр может накопиться несколько нажатий; предел - защита от зависания
+  for _ = 1, 64 do
+    local ch = gfx.getchar()
+    if ch < 0 then gfx.quit(); return end
+    if ch == 0 then break end
+    if ch == 27 then
+      if query == "" then gfx.quit(); return end
+      set_query("")
+    else
+      type_char(ch)
+    end
+  end
   if draw() == "close" then gfx.quit(); return end
   gfx.update()
   reaper.defer(loop)
