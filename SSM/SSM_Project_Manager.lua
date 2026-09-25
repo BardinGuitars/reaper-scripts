@@ -1,11 +1,15 @@
 -- @description SSM_Project_Manager
--- @version 2.2
+-- @version 2.3
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер недавних проектов (Recent projects): поиск, сортировка,
 --   избранное, пометки, быстрое открытие и чистка списка.
 --
 --   Список и поиск
+--     - колонки: галочка, ★, имя проекта (имя файла без .rpp), путь, дата
+--       изменения (день-месяц-год), размер. Ширину имени, пути, даты и размера
+--       можно менять - тащите разделители в строке заголовков (двойной клик по
+--       разделителю возвращает стандартную ширину); ширина запоминается;
 --     - строка поиска: просто печатайте - остаются проекты, в имени, пути или
 --       пометке которых есть все введённые слова (регистр не важен);
 --     - ряд кнопок сортировки: как в REAPER, по имени, папке, дате изменения
@@ -37,6 +41,10 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   2.3 Колонка «Имя» (имя проекта из пути) между звездой и путём. Заголовки
+--   колонок с разделителями: ширину имени, пути, даты и размера можно менять
+--   мышью (запоминается, двойной клик по разделителю - сброс). Дата в формате
+--   день-месяц-год.
 --   2.2 Клавиатура (стрелки, Enter, Tab/Insert, Shift+клик), двойной клик
 --   открывает проект, «Отметить все» / «Снять все», фильтры «Только не
 --   найденные» и «Возраст». Избранное (★) и пометки с поиском по ним.
@@ -63,7 +71,9 @@ local SORT_Y, SORT_H = 110, 34
 local CHIP_Y, CHIP_H = 152, 30
 local EXT_SECTION = "SSM_ProjectManager"
 local OLD_EXT_SECTION = "SSM_RecentCleanup" -- настройки прежнего названия скрипта
-local SIZE_W, DATE_W = 84, 108
+local COLS_H = 26 -- строка заголовков колонок под шапкой
+local COL_DEF = { name = 220, date = 100, size = 84 } -- стандартная ширина, пикселей
+local COL_MIN = { name = 60, path = 100, date = 70, size = 56 }
 local F_ROW, F_TITLE, F_SMALL, F_BTN, F_SORT = 17, 20, 15, 17, 16
 local CB = 20 -- сторона чекбокса
 local STAR_X, STAR_W = 44, 22
@@ -271,9 +281,12 @@ local function fmt_size(bytes)
   return string.format("%.1f МБ", bytes / 1024 / 1024)
 end
 
+-- "ГГГГ.ММ.ДД чч:мм:сс" -> "ДД-ММ-ГГГГ"
 local function fmt_date(mtime)
   if not mtime then return "" end
-  return (mtime:sub(1, 10):gsub("%.", "-"))
+  local y, m, d = mtime:match("^(%d%d%d%d)%.(%d%d)%.(%d%d)")
+  if not y then return "" end
+  return d .. "-" .. m .. "-" .. y
 end
 
 local function compare_items(a, b)
@@ -382,13 +395,15 @@ local function reload()
     local exists = path ~= "" and reaper.file_exists(path)
     local name = path:match("([^\\/]+)$") or path
     local dir = path:sub(1, #path - #name)
+    local title = (name:gsub("%.[Rr][Pp][Pp][%-%w]*$", "")) -- имя проекта: без .rpp / .rpp-bak
+    if title == "" then title = name end
     local size, mtime
     if exists then size, mtime = file_info(path) end
     if mtime then has_dates = true end
     local note = notes[path] or ""
     local path_l = fold(path)
     items[#items + 1] = {
-      path = path, exists = exists, checked = false, ord = #items + 1,
+      path = path, title = title, exists = exists, checked = false, ord = #items + 1,
       name_l = fold(name), dir_l = fold(dir), path_l = path_l, size = size, mtime = mtime,
       fav = favs[path] == true, note = note, hay_l = path_l .. " " .. fold(note),
     }
@@ -639,6 +654,77 @@ local function get_info(it)
 end
 
 ----------------------------------------------------------------------
+-- Колонки списка: имя | путь | дата | размер
+----------------------------------------------------------------------
+-- Хранятся ширины имени, даты и размера; путь занимает остаток строки. Так
+-- три разделителя двигают границы между соседними колонками, а общая ширина
+-- всегда равна ширине окна (без горизонтальной прокрутки).
+local col_w = { name = COL_DEF.name, date = COL_DEF.date, size = COL_DEF.size }
+for k in pairs(COL_DEF) do
+  local v = tonumber(reaper.GetExtState(EXT_SECTION, "col_" .. k))
+  if v and v >= COL_MIN[k] and v <= 2000 then col_w[k] = v end
+end
+
+local function save_cols()
+  for k, v in pairs(col_w) do
+    reaper.SetExtState(EXT_SECTION, "col_" .. k, tostring(math.floor(v + 0.5)), true)
+  end
+end
+
+local function reset_cols()
+  for k, v in pairs(COL_DEF) do col_w[k] = v end
+  save_cols()
+end
+
+-- Положение колонок для окна шириной w. Без js_ReaScriptAPI даты нет - колонка
+-- «Дата» скрыта. В узком окне имя/дата/размер временно ужимаются, путь не меньше минимума.
+local function layout(w)
+  local right = w - 26 -- справа остаётся место под полосу прокрутки
+  local avail = right - TEXT_X
+  local nw, dw, sw = col_w.name, has_dates and col_w.date or 0, col_w.size
+  local fixed = nw + dw + sw
+  if avail - fixed < COL_MIN.path then
+    local k = math.max(0.3, (avail - COL_MIN.path) / fixed)
+    nw, dw, sw = nw * k, dw * k, sw * k
+    fixed = nw + dw + sw
+  end
+  local pw = avail - fixed
+  local L = { right = right, name_x = TEXT_X, name_w = nw, path_x = TEXT_X + nw, path_w = pw }
+  L.date_x, L.date_w = L.path_x + pw, dw
+  L.size_x, L.size_w = L.date_x + dw, sw
+  return L
+end
+
+-- Разделители заголовка: какой ширине что соответствует
+local function dividers(L)
+  local d = { { x = L.path_x, kind = "name" } }             -- имя | путь: меняет имя
+  if has_dates then
+    d[#d + 1] = { x = L.date_x, kind = "date_l" }           -- путь | дата: меняет дату
+    d[#d + 1] = { x = L.size_x, kind = "date_size" }        -- дата | размер: дата <-> размер
+  else
+    d[#d + 1] = { x = L.size_x, kind = "size_l" }           -- путь | размер: меняет размер
+  end
+  return d
+end
+
+-- dx - сдвиг мыши с начала перетаскивания; start - ширины на тот момент
+local function apply_drag(kind, start, dx)
+  if kind == "name" then
+    col_w.name = math.max(COL_MIN.name, math.min(start.name + dx, start.name + start.path - COL_MIN.path))
+  elseif kind == "date_l" then
+    col_w.date = math.max(COL_MIN.date, math.min(start.date - dx, start.date + start.path - COL_MIN.path))
+  elseif kind == "date_size" then
+    local d = math.max(COL_MIN.date - start.date, math.min(dx, start.size - COL_MIN.size))
+    col_w.date, col_w.size = start.date + d, start.size - d
+  else
+    col_w.size = math.max(COL_MIN.size, math.min(start.size - dx, start.size + start.path - COL_MIN.path))
+  end
+end
+
+local col_drag = nil               -- { kind, x0, start } пока разделитель тащат
+local last_div_click_t = -1e9
+
+----------------------------------------------------------------------
 -- Ввод с клавиатуры
 ----------------------------------------------------------------------
 -- Символ из кода gfx.getchar: ASCII и Latin-1 - как есть, остальной Unicode
@@ -698,7 +784,7 @@ local function move_cursor_to(idx)
 end
 
 local function page_rows()
-  return math.max(1, math.floor((gfx.h - HEAD_H - INFO_H - FOOT_H) / ROW_H))
+  return math.max(1, math.floor((gfx.h - HEAD_H - COLS_H - INFO_H - FOOT_H) / ROW_H))
 end
 
 -- Одно нажатие клавиши. Возвращает "close", если окно нужно закрыть.
@@ -824,7 +910,7 @@ local function draw()
   local shift = (cap & 8) ~= 0
   last_cap = cap
 
-  local list_y = HEAD_H
+  local list_y = HEAD_H + COLS_H
   local foot_y = h - FOOT_H
   local info_y = foot_y - INFO_H
   local list_h = math.max(60, info_y - list_y)
@@ -836,6 +922,35 @@ local function draw()
 
   -- клик мимо поля пометки завершает её редактирование
   if edit and click and not mouse_in(note_x, note_y, note_w, note_h) then commit_edit() end
+
+  -- ширина колонок: перетаскивание разделителя, двойной клик - сброс
+  if col_drag then
+    if down then
+      apply_drag(col_drag.kind, col_drag.start, gfx.mouse_x - col_drag.x0)
+    else
+      col_drag = nil
+      save_cols()
+    end
+  end
+  local L = layout(w)
+  local divs = dividers(L)
+  if click and not col_drag and gfx.mouse_y >= HEAD_H and gfx.mouse_y < list_y then
+    for _, dv in ipairs(divs) do
+      if math.abs(gfx.mouse_x - dv.x) <= 4 then
+        local now = reaper.time_precise()
+        if now - last_div_click_t < DOUBLE_CLICK then
+          reset_cols()
+          last_div_click_t = -1e9
+        else
+          last_div_click_t = now
+          col_w.name, col_w.date, col_w.size = L.name_w, has_dates and L.date_w or col_w.date, L.size_w
+          col_drag = { kind = dv.kind, x0 = gfx.mouse_x,
+            start = { name = col_w.name, date = col_w.date, size = col_w.size, path = L.path_w } }
+        end
+        break
+      end
+    end
+  end
 
   local total_h = #view * ROW_H
   local max_scroll = math.max(0, total_h - list_h)
@@ -857,7 +972,6 @@ local function draw()
 
   -- строки списка (шапка и панели перекрывают выступающие части)
   gfx.setfont(1, "Arial", F_ROW)
-  local text_right = w - 26
   local open_now, fav_now
   for i, it in ipairs(view) do
     local ry = list_y + (i - 1) * ROW_H - scroll
@@ -884,35 +998,30 @@ local function draw()
       draw_text(it.fav and "★" or "☆", STAR_X, ry + (ROW_H - F_ROW) / 2 - 1, it.fav and col.star or col.dim)
 
       local small_y = ry + (ROW_H - F_SMALL) / 2
-      local tag_w = 0
-      if not it.exists then
-        local tag = "файл не найден"
+      local text_y = ry + (ROW_H - F_ROW) / 2 - 1
+      gfx.setfont(1, "Arial", F_ROW)
+      draw_text(clip_head(it.title, L.name_w - 12), L.name_x + 4, text_y, it.exists and col.text or col.dim)
+
+      -- пометка - у правого края колонки пути
+      local note_tag_w = 0
+      if it.note ~= "" then
         gfx.setfont(1, "Arial", F_SMALL)
-        tag_w = gfx.measurestr(tag) + 12
-        draw_text(tag, text_right - tag_w + 12, small_y, col.danger)
+        local shown = clip_head(it.note, math.min(220, L.path_w * 0.4))
+        note_tag_w = gfx.measurestr(shown) + 14
+        draw_text(shown, L.date_x - note_tag_w + 4, small_y, col.tag)
         gfx.setfont(1, "Arial", F_ROW)
       end
-      local right_w = tag_w
+      draw_text(clip_tail(it.path, L.path_w - 12 - note_tag_w), L.path_x + 4, text_y, col.dim)
+
+      gfx.setfont(1, "Arial", F_SMALL)
       if it.exists then
-        right_w = SIZE_W + (has_dates and DATE_W or 0) + 6
-        gfx.setfont(1, "Arial", F_SMALL)
+        if has_dates then draw_text(fmt_date(it.mtime), L.date_x + 4, small_y, col.dim) end
         local sz = fmt_size(it.size)
-        draw_text(sz, text_right - gfx.measurestr(sz), small_y, col.dim)
-        if has_dates then
-          local dt = fmt_date(it.mtime)
-          draw_text(dt, text_right - SIZE_W - gfx.measurestr(dt), small_y, col.dim)
-        end
+        draw_text(sz, L.right - 2 - gfx.measurestr(sz), small_y, col.dim)
+      else
+        local tag = "не найден"
+        draw_text(tag, L.right - 2 - gfx.measurestr(tag), small_y, col.danger)
       end
-      local note_tag_w = 0
-      if it.note ~= "" then -- пометка правее пути, слева от даты и размера
-        gfx.setfont(1, "Arial", F_SMALL)
-        local shown = clip_head(it.note, 220)
-        note_tag_w = gfx.measurestr(shown) + 18
-        draw_text(shown, text_right - right_w - note_tag_w + 12, small_y, col.tag)
-      end
-      gfx.setfont(1, "Arial", F_ROW)
-      local avail = text_right - TEXT_X - right_w - note_tag_w
-      draw_text(clip_tail(it.path, avail), TEXT_X, ry + (ROW_H - F_ROW) / 2 - 1, it.exists and col.text or col.dim)
     end
   end
 
@@ -927,6 +1036,21 @@ local function draw()
     local thumb_h = math.max(24, list_h * list_h / total_h)
     local thumb_y = list_y + (list_h - thumb_h) * (scroll / max_scroll)
     set_color(col.border); gfx.rect(w - 10, thumb_y, 6, thumb_h, 1)
+  end
+
+  -- заголовки колонок с разделителями
+  set_color(col.row_alt); gfx.rect(0, HEAD_H, w, COLS_H, 1)
+  set_color(col.border); gfx.rect(0, list_y - 1, w, 1, 1)
+  gfx.setfont(1, "Arial", F_SMALL)
+  local hy = HEAD_H + (COLS_H - F_SMALL) / 2 - 1
+  draw_text("Имя", L.name_x + 4, hy, col.dim)
+  draw_text("Путь", L.path_x + 4, hy, col.dim)
+  if has_dates then draw_text("Дата", L.date_x + 4, hy, col.dim) end
+  draw_text("Размер", L.right - 2 - gfx.measurestr("Размер"), hy, col.dim)
+  for _, dv in ipairs(divs) do
+    local hot = (col_drag and col_drag.kind == dv.kind) or (not col_drag and mouse_in(dv.x - 4, HEAD_H, 9, COLS_H))
+    set_color(hot and col.accent or col.border)
+    gfx.rect(dv.x - (hot and 1 or 0), HEAD_H + 4, hot and 3 or 1, COLS_H - 8, 1)
   end
 
   -- шапка
