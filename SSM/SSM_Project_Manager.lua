@@ -1,9 +1,20 @@
 -- @description SSM_Project_Manager
--- @version 2.3
+-- @version 3.0
 -- @author @ssm_metalmix
 -- @about
---   🗂 Менеджер недавних проектов (Recent projects): поиск, сортировка,
---   избранное, пометки, быстрое открытие и чистка списка.
+--   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
+--   папок - поиск, сортировка, избранное, пометки, быстрое открытие, чистка.
+--
+--   Источник списка (второй ряд кнопок)
+--     - «Недавние» - список Recent projects из reaper.ini (чистка, удаление);
+--     - «Все проекты» - каталог файлов .rpp из папок, которые вы добавили
+--       кнопкой «Папки». Список только для чтения: проекты можно искать,
+--       сортировать, помечать, открывать, но не удалять. Сначала папок нет -
+--       список пуст. В «Папки» - добавить/убрать папку, «Пересканировать»
+--       (по кнопке; результат запоминается в файле рядом с reaper.ini),
+--       исключения: папки Backups и файлы .rpp-bak (по умолчанию пропускаются).
+--       Для выбора папки диалогом и для дат нужен js_ReaScriptAPI (без него
+--       путь вводится вручную, а дат в «Всех проектах» нет).
 --
 --   Список и поиск
 --     - колонки: галочка, ★, имя проекта (имя файла без .rpp), путь, дата
@@ -41,6 +52,10 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.0 Режим «Все проекты»: поиск по всем .rpp из выбранных папок. Кнопка
+--   «Папки» (добавить/убрать папку, пересканировать, исключения Backups и
+--   .rpp-bak), индекс запоминается. Переключатель «Недавние | Все проекты»
+--   во втором ряду кнопок.
 --   2.3 Колонка «Имя» (имя проекта из пути) между звездой и путём. Заголовки
 --   колонок с разделителями: ширину имени, пути, даты и размера можно менять
 --   мышью (запоминается, двойной клик по разделителю - сброс). Дата в формате
@@ -63,7 +78,7 @@
 --   1.0 Релиз: автоматическое удаление несуществующих проектов.
 
 local TITLE = "SSM Project Manager"
-local WIN_W, WIN_H = 940, 820
+local WIN_W, WIN_H = 1000, 820
 local MIN_W, MIN_H = 720, 560
 local HEAD_H, INFO_H, FOOT_H, ROW_H = 192, 90, 116, 34
 local SEARCH_Y, SEARCH_H = 66, 34
@@ -74,6 +89,9 @@ local OLD_EXT_SECTION = "SSM_RecentCleanup" -- настройки прежнег
 local COLS_H = 26 -- строка заголовков колонок под шапкой
 local COL_DEF = { name = 220, date = 100, size = 84 } -- стандартная ширина, пикселей
 local COL_MIN = { name = 60, path = 100, date = 70, size = 56 }
+local INDEX_NAME = "SSM_ProjectManager_index.txt" -- индекс «Всех проектов», рядом с reaper.ini
+local SCAN_BUDGET, SCAN_MAX_DEPTH = 0.02, 20      -- секунд на кадр; глубина вложенности папок
+local SET_ROW_Y0, SET_ROW_H = HEAD_H + 70, 34     -- окно «Папки»: первая строка и высота строки
 local F_ROW, F_TITLE, F_SMALL, F_BTN, F_SORT = 17, 20, 15, 17, 16
 local CB = 20 -- сторона чекбокса
 local STAR_X, STAR_W = 44, 22
@@ -177,6 +195,10 @@ local anchor = nil         -- от него считается диапазон 
 local follow_cursor = false
 local last_click_it, last_click_t = nil, 0
 local undo_stack = {}      -- удаления: { removed = { {pos=, path=}, ... } }
+local source = "recent"    -- источник списка: "recent" (Recent projects) | "library" (все проекты)
+local show_settings = false -- открыто окно «Папки»
+local recent_items = {}    -- список Recent (активный список - items)
+local lib = { dirs = {}, items = {}, loaded = false, skip_backups = true, with_bak = false, scan = nil }
 
 ----------------------------------------------------------------------
 -- Избранное и пометки (ExtState; пути кодируются, чтобы не ломать формат)
@@ -384,34 +406,292 @@ local function set_note_of(it, text)
   refresh_view()
 end
 
+local function make_item(path, exists, size, mtime, ord)
+  local name = path:match("([^\\/]+)$") or path
+  local dir = path:sub(1, #path - #name)
+  local title = (name:gsub("%.[Rr][Pp][Pp][%-%w]*$", "")) -- имя проекта: без .rpp / .rpp-bak
+  if title == "" then title = name end
+  local note = notes[path] or ""
+  local path_l = fold(path)
+  return {
+    path = path, title = title, exists = exists, checked = false, ord = ord,
+    name_l = fold(name), dir_l = fold(dir), path_l = path_l, size = size, mtime = mtime,
+    fav = favs[path] == true, note = note, hay_l = path_l .. " " .. fold(note),
+  }
+end
+
+local function update_has_dates()
+  has_dates = false
+  for _, it in ipairs(items) do if it.mtime then has_dates = true; break end end
+end
+
+-- Избранное и пометки общие для обоих списков: после переключения источника подтянуть их
+local function refresh_meta(list)
+  for _, it in ipairs(list) do
+    it.fav = favs[it.path] == true
+    local n = notes[it.path] or ""
+    if n ~= it.note then it.note = n; it.hay_l = it.path_l .. " " .. fold(n) end
+  end
+end
+
 local function reload()
   local st, err = load_ini()
   if not st then return false, err end
   local keep_idx = index_of(cursor)
-  items = {}
-  has_dates = false
+  local list = {}
   for _, r in ipairs(st.recents) do
-    local path = r.path
-    local exists = path ~= "" and reaper.file_exists(path)
-    local name = path:match("([^\\/]+)$") or path
-    local dir = path:sub(1, #path - #name)
-    local title = (name:gsub("%.[Rr][Pp][Pp][%-%w]*$", "")) -- имя проекта: без .rpp / .rpp-bak
-    if title == "" then title = name end
+    local exists = r.path ~= "" and reaper.file_exists(r.path)
     local size, mtime
-    if exists then size, mtime = file_info(path) end
-    if mtime then has_dates = true end
-    local note = notes[path] or ""
-    local path_l = fold(path)
-    items[#items + 1] = {
-      path = path, title = title, exists = exists, checked = false, ord = #items + 1,
-      name_l = fold(name), dir_l = fold(dir), path_l = path_l, size = size, mtime = mtime,
-      fav = favs[path] == true, note = note, hay_l = path_l .. " " .. fold(note),
-    }
+    if exists then size, mtime = file_info(r.path) end
+    list[#list + 1] = make_item(r.path, exists, size, mtime, #list + 1)
   end
-  cursor, anchor = nil, nil
-  apply_sort()
-  if keep_idx and #view > 0 then cursor = view[math.min(keep_idx, #view)] end
+  recent_items = list
+  if source == "recent" then
+    items = list
+    cursor, anchor = nil, nil
+    update_has_dates()
+    apply_sort()
+    if keep_idx and #view > 0 then cursor = view[math.min(keep_idx, #view)] end
+  end
   return true
+end
+
+----------------------------------------------------------------------
+-- Библиотека: все проекты из выбранных папок (режим «Все проекты»)
+----------------------------------------------------------------------
+local set_source -- ниже: переключение источника списка
+
+do
+  local INDEX_PATH = (ini_path:match("^(.*)[/\\][^/\\]*$") or ".") .. "/" .. INDEX_NAME
+  local IS_WIN = (reaper.GetOS() or ""):find("^Win") ~= nil
+
+  for rec in (reaper.GetExtState(EXT_SECTION, "lib_dirs") .. "|"):gmatch("([^|]*)|") do
+    if rec ~= "" then lib.dirs[#lib.dirs + 1] = dec(rec) end
+  end
+  lib.skip_backups = reaper.GetExtState(EXT_SECTION, "lib_skip_backups") ~= "0"
+  lib.with_bak = reaper.GetExtState(EXT_SECTION, "lib_with_bak") == "1"
+
+  function lib.save_settings()
+    local d = {}
+    for _, p in ipairs(lib.dirs) do d[#d + 1] = enc(p) end
+    reaper.SetExtState(EXT_SECTION, "lib_dirs", table.concat(d, "|"), true)
+    reaper.SetExtState(EXT_SECTION, "lib_skip_backups", lib.skip_backups and "1" or "0", true)
+    reaper.SetExtState(EXT_SECTION, "lib_with_bak", lib.with_bak and "1" or "0", true)
+  end
+
+  local function join_path(dir, name)
+    local last = dir:sub(-1)
+    if last == "/" or last == "\\" then return dir .. name end
+    return dir .. ((IS_WIN or dir:find("\\", 1, true)) and "\\" or "/") .. name
+  end
+
+  -- лежит ли файл в одной из выбранных папок (без учёта регистра и вида разделителя)
+  local function under_dirs(p)
+    local pl = fold(p)
+    for _, d in ipairs(lib.dirs) do
+      local dl = fold(d):gsub("[/\\]+$", "")
+      if pl:sub(1, #dl) == dl and pl:sub(#dl + 1, #dl + 1):match("[/\\]") then return true end
+    end
+    return false
+  end
+
+  -- Индекс: строка заголовка, затем "путь<TAB>дата<TAB>размер"
+  local function save_index(entries)
+    local f = io.open(INDEX_PATH, "wb")
+    if not f then return false end
+    f:write("SSM_PM_INDEX 1\n")
+    for _, e in ipairs(entries) do
+      f:write(e.path, "\t", e.mtime or "", "\t", tostring(e.size or ""), "\n")
+    end
+    f:close()
+    return true
+  end
+
+  local function load_index()
+    local entries = {}
+    local f = io.open(INDEX_PATH, "rb")
+    if not f then return entries end
+    if f:read("*l") == "SSM_PM_INDEX 1" then
+      for line in f:lines() do
+        local p, m, sz = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)$")
+        if p and p ~= "" then
+          entries[#entries + 1] = { path = p, mtime = m ~= "" and m or nil, size = tonumber(sz) }
+        end
+      end
+    end
+    f:close()
+    return entries
+  end
+
+  -- verify: проверить, что файлы всё ещё на месте (для данных из индекса)
+  local function build(entries, verify)
+    local list = {}
+    for _, e in ipairs(entries) do
+      local exists = true
+      if verify then exists = reaper.file_exists(e.path) end
+      list[#list + 1] = make_item(e.path, exists, e.size, e.mtime, #list + 1)
+    end
+    return list
+  end
+
+  local function reset_active_list()
+    if source ~= "library" then return end
+    items = lib.items
+    cursor, anchor = nil, nil
+    update_has_dates()
+    apply_sort()
+    scroll = 0
+  end
+
+  function lib.ensure_loaded()
+    if lib.loaded then return end
+    lib.loaded = true
+    local entries = {}
+    for _, e in ipairs(load_index()) do
+      if under_dirs(e.path) then entries[#entries + 1] = e end
+    end
+    lib.items = build(entries, true)
+  end
+
+  local function is_project_file(name)
+    if name:sub(1, 2) == "._" then return false end -- служебные файлы macOS
+    local low = name:lower()
+    return low:match("%.rpp$") ~= nil or (lib.with_bak and low:match("%.rpp%-bak$") ~= nil)
+  end
+
+  function lib.start_scan()
+    if lib.scan then return end
+    if #lib.dirs == 0 then status = "Сначала добавьте папку с проектами (кнопка «Папки»)."; return end
+    local stack = {}
+    for i = #lib.dirs, 1, -1 do stack[#stack + 1] = { dir = lib.dirs[i], depth = 0 } end
+    lib.scan = { stack = stack, found = {}, seen = {}, ndirs = 0 }
+    status = "Сканирование…"
+  end
+
+  function lib.stop_scan()
+    lib.scan = nil
+    status = "Сканирование остановлено, список не изменён."
+  end
+
+  local function finish_scan()
+    local sc = lib.scan
+    lib.scan = nil
+    lib.loaded = true
+    save_index(sc.found)
+    lib.items = build(sc.found, false)
+    reset_active_list()
+    status = string.format("Найдено проектов: %d (папок просмотрено: %d).", #sc.found, sc.ndirs)
+  end
+
+  -- Обход папок небольшими порциями: один кадр - не дольше SCAN_BUDGET секунд
+  function lib.scan_step()
+    local sc = lib.scan
+    if not sc then return end
+    local t0 = reaper.time_precise()
+    while #sc.stack > 0 do
+      local d = table.remove(sc.stack)
+      sc.ndirs = sc.ndirs + 1
+      reaper.EnumerateFiles(d.dir, -1) -- сбросить кэш каталога, чтобы пересканирование видело новые файлы
+      reaper.EnumerateSubdirectories(d.dir, -1)
+      local i = 0
+      while true do
+        local fn = reaper.EnumerateFiles(d.dir, i)
+        if not fn then break end
+        i = i + 1
+        if is_project_file(fn) then
+          local p = join_path(d.dir, fn)
+          if not sc.seen[p] then
+            sc.seen[p] = true
+            local size, mtime = file_info(p)
+            sc.found[#sc.found + 1] = { path = p, size = size, mtime = mtime }
+          end
+        end
+      end
+      if d.depth < SCAN_MAX_DEPTH then
+        local subs, j = {}, 0
+        while true do
+          local sn = reaper.EnumerateSubdirectories(d.dir, j)
+          if not sn then break end
+          j = j + 1
+          if not (lib.skip_backups and sn:lower() == "backups") then subs[#subs + 1] = sn end
+        end
+        for k = #subs, 1, -1 do -- в обратном порядке: со стека берутся по алфавиту
+          sc.stack[#sc.stack + 1] = { dir = join_path(d.dir, subs[k]), depth = d.depth + 1 }
+        end
+      end
+      if reaper.time_precise() - t0 >= SCAN_BUDGET then break end
+    end
+    if #sc.stack == 0 then
+      finish_scan()
+    else
+      status = string.format("Сканирование… найдено проектов: %d, папок просмотрено: %d", #sc.found, sc.ndirs)
+    end
+  end
+
+  local function normalize_dir(dir)
+    dir = dir:gsub("^%s+", ""):gsub("%s+$", "")
+    if IS_WIN then dir = dir:gsub("/", "\\") end
+    local trimmed = dir:gsub("[/\\]+$", "")
+    if trimmed == "" then return dir end
+    if trimmed:match("^%a:$") then return trimmed .. "\\" end
+    return trimmed
+  end
+
+  function lib.add_dir(dir)
+    dir = normalize_dir(dir or "")
+    if dir == "" then return end
+    if has_js_stat and reaper.JS_File_Stat(dir) ~= 0 then status = "Папка не найдена: " .. dir; return end
+    local dl = fold(dir)
+    for _, d in ipairs(lib.dirs) do
+      if fold(d) == dl then status = "Эта папка уже в списке."; return end
+    end
+    lib.dirs[#lib.dirs + 1] = dir
+    lib.save_settings()
+    lib.scan = nil
+    lib.start_scan()
+  end
+
+  function lib.remove_dir(i)
+    local removed = table.remove(lib.dirs, i)
+    if not removed then return end
+    lib.save_settings()
+    lib.scan = nil
+    lib.ensure_loaded()
+    local keep = {}
+    for _, it in ipairs(lib.items) do -- проекты убранной папки уходят из индекса
+      if under_dirs(it.path) then keep[#keep + 1] = { path = it.path, size = it.size, mtime = it.mtime } end
+    end
+    save_index(keep)
+    lib.items = build(keep, false)
+    reset_active_list()
+    status = "Папка убрана из списка: " .. removed
+  end
+
+  function lib.add_folder_dialog()
+    local dir
+    if reaper.JS_Dialog_BrowseForFolder then
+      local rv, folder = reaper.JS_Dialog_BrowseForFolder("Папка с проектами", lib.dirs[#lib.dirs] or "")
+      if rv == 1 then dir = folder end
+    else
+      local ok, val = reaper.GetUserInputs("Папка с проектами", 1, "Путь к папке,extrawidth=420", "")
+      if ok then dir = val end
+    end
+    if dir and dir ~= "" then lib.add_dir(dir) end
+  end
+end
+
+set_source = function(src)
+  if src == source and not show_settings then return end
+  show_settings = false
+  edit = nil
+  if src == "library" then lib.ensure_loaded() end
+  source = src
+  items = (src == "recent") and recent_items or lib.items
+  refresh_meta(items)
+  cursor, anchor, last_click_it = nil, nil, nil
+  update_has_dates()
+  apply_sort()
+  scroll = 0
 end
 
 local function count_missing()
@@ -789,6 +1069,10 @@ end
 
 -- Одно нажатие клавиши. Возвращает "close", если окно нужно закрыть.
 local function handle_key(ch)
+  if show_settings then -- в окне «Папки» ввода нет: Esc возвращает к списку
+    if ch == 27 then show_settings = false end
+    return
+  end
   if edit then
     if ch == 13 then commit_edit()
     elseif ch == 27 then edit = nil
@@ -806,7 +1090,7 @@ local function handle_key(ch)
   elseif ch == KEY.home then move_cursor_to(1)
   elseif ch == KEY["end"] then move_cursor_to(#view)
   elseif ch == 9 or ch == KEY.ins then -- Tab / Insert: отметить и перейти ниже
-    if cursor then
+    if cursor and source == "recent" then
       cursor.checked = not cursor.checked
       anchor = cursor
       move_cursor_to(idx + 1)
@@ -821,6 +1105,10 @@ local function row_click(it, shift, now)
   local dbl = not shift and last_click_it == it and (now - last_click_t) < DOUBLE_CLICK
   last_click_it, last_click_t = it, now
   cursor = it
+  if source == "library" then -- в «Всех проектах» галочек нет: клик ставит курсор
+    if dbl then last_click_it = nil end
+    return dbl
+  end
   if shift and anchor and anchor ~= it then
     local a, b = index_of(anchor), index_of(it)
     if a and b then
@@ -909,6 +1197,7 @@ local function draw()
   local click = down and (last_cap & 1) == 0
   local shift = (cap & 8) ~= 0
   last_cap = cap
+  local lclick = click and not show_settings -- клики по списку и панели проекта не проходят под окно «Папки»
 
   local list_y = HEAD_H + COLS_H
   local foot_y = h - FOOT_H
@@ -934,7 +1223,7 @@ local function draw()
   end
   local L = layout(w)
   local divs = dividers(L)
-  if click and not col_drag and gfx.mouse_y >= HEAD_H and gfx.mouse_y < list_y then
+  if lclick and not col_drag and gfx.mouse_y >= HEAD_H and gfx.mouse_y < list_y then
     for _, dv in ipairs(divs) do
       if math.abs(gfx.mouse_x - dv.x) <= 4 then
         local now = reaper.time_precise()
@@ -981,7 +1270,7 @@ local function draw()
       local in_list = gfx.mouse_y >= list_y and gfx.mouse_y < list_y + list_h
       if in_list and mouse_in(0, ry, w - 14, ROW_H) then
         set_color(col.panel); gfx.rect(0, ry, w, ROW_H, 1)
-        if click then
+        if lclick then
           if mouse_in(STAR_X - 2, ry, STAR_W + 4, ROW_H) then
             fav_now = it
           elseif row_click(it, shift, reaper.time_precise()) then
@@ -993,7 +1282,7 @@ local function draw()
         set_color(col.accent); gfx.rect(1, ry, w - 16, ROW_H, 0)
       end
 
-      draw_checkbox(16, ry + (ROW_H - CB) / 2, it.checked)
+      if source == "recent" then draw_checkbox(16, ry + (ROW_H - CB) / 2, it.checked) end
       gfx.setfont(1, "Arial", F_ROW)
       draw_text(it.fav and "★" or "☆", STAR_X, ry + (ROW_H - F_ROW) / 2 - 1, it.fav and col.star or col.dim)
 
@@ -1026,7 +1315,12 @@ local function draw()
   end
 
   if #items == 0 then
-    draw_text("Список Recent projects пуст.", 16, list_y + 18, col.dim)
+    local msg
+    if source == "recent" then msg = "Список Recent projects пуст."
+    elseif #lib.dirs == 0 then msg = "Папки не заданы. Нажмите «Папки» и добавьте папку с проектами."
+    elseif lib.scan then msg = "Идёт сканирование…"
+    else msg = "Список пуст. Нажмите «Пересканировать»." end
+    draw_text(msg, 16, list_y + 18, col.dim)
   elseif #view == 0 then
     draw_text("Ничего не найдено. Измените поиск или фильтры.", 16, list_y + 18, col.dim)
   end
@@ -1058,13 +1352,19 @@ local function draw()
   set_color(col.border); gfx.rect(0, HEAD_H - 1, w, 1, 1)
   gfx.setfont(1, "Arial", F_TITLE)
   if not filters_active() then
-    draw_text(string.format("Недавние проекты: %d  (не найдено: %d)", #items, count_missing()), 16, 9, col.text)
+    draw_text(string.format("%s: %d  (не найдено: %d)", source == "recent" and "Недавние проекты" or "Все проекты",
+      #items, count_missing()), 16, 9, col.text)
   else
     draw_text(string.format("Найдено: %d из %d  (не найдено: %d)", #view, #items, count_missing()), 16, 9, col.text)
   end
   gfx.setfont(1, "Arial", F_SMALL)
-  draw_text("Галочка - выбрать · ★ - избранное · двойной клик или Enter - открыть · F2 - пометка · Esc - очистить поиск",
-    16, 40, col.dim)
+  if source == "recent" then
+    draw_text("Галочка - выбрать · ★ - избранное · двойной клик или Enter - открыть · F2 - пометка · Esc - очистить поиск",
+      16, 40, col.dim)
+  else
+    draw_text("★ - избранное · двойной клик или Enter - открыть · F2 - пометка · Esc - очистить поиск · «Папки» - где искать проекты",
+      16, 40, col.dim)
+  end
   if not has_js_stat then
     gfx.setfont(1, "Arial", 14)
     local note = "Дата изменения: нужен js_ReaScriptAPI"
@@ -1106,6 +1406,7 @@ local function draw()
       local active = (sk.key == sort_key)
       local enabled = not (sk.key == "date" and not has_dates)
       local label = sk.label
+      if sk.key == "order" and source == "library" then label = "Как найдено" end
       if active and (sk.key ~= "order" or sort_desc) then label = label .. (sort_desc and " ▼" or " ▲") end
       local x = 16 + (i - 1) * (bw2 + gap)
       local hov = enabled and mouse_in(x, SORT_Y, bw2, SORT_H)
@@ -1125,22 +1426,52 @@ local function draw()
     if clicked_key then set_sort(clicked_key) end
   end
 
-  -- ряд фильтров и массовой отметки
+  -- второй ряд: источник списка, фильтры, массовая отметка (Недавние) или «Папки» (Все проекты)
   do
-    local chip_missing = draw_button(16, CHIP_Y, 210, CHIP_H, "Только не найденные", true, click,
-      f_missing and col.accent or nil, F_SMALL)
-    local age_label = has_dates and ("Возраст: " .. AGE_STEPS[f_age][2]) or "Возраст: нужен js_ReaScriptAPI"
-    local chip_age = draw_button(16 + 218, CHIP_Y, 250, CHIP_H, age_label, has_dates, click,
-      f_age > 1 and col.accent or nil, F_SMALL)
-    local bw3 = 130
-    local act_none = draw_button(w - 16 - bw3, CHIP_Y, bw3, CHIP_H, "Снять все", true, click, nil, F_SMALL)
-    local act_all = draw_button(w - 16 - bw3 * 2 - 8, CHIP_Y, bw3, CHIP_H, "Отметить все", #view > 0, click, nil, F_SMALL)
-    if chip_missing then f_missing = not f_missing; after_filter_change()
-    elseif chip_age then f_age = f_age % #AGE_STEPS + 1; after_filter_change()
-    elseif act_all then
+    local specs = {
+      { id = "recent", w = 112, label = "Недавние", color = source == "recent" and col.accent or nil },
+      { id = "library", w = 112, label = "Все проекты", color = source == "library" and col.accent or nil },
+      { id = "missing", w = 190, label = "Только не найденные", color = f_missing and col.accent or nil },
+      { id = "age", w = 210, enabled = has_dates, color = f_age > 1 and col.accent or nil,
+        label = has_dates and ("Возраст: " .. AGE_STEPS[f_age][2]) or "Возраст: нужен js_ReaScriptAPI" },
+    }
+    local right
+    if source == "recent" then
+      right = { { id = "all", w = 120, label = "Отметить все", enabled = #view > 0 },
+                { id = "none", w = 110, label = "Снять все" } }
+    else
+      right = { { id = "folders", w = 100, label = "Папки", color = show_settings and col.accent or nil } }
+    end
+    local gap, sum = 8, 0
+    for _, b in ipairs(specs) do sum = sum + b.w end
+    for _, b in ipairs(right) do sum = sum + b.w end
+    local gaps = (#specs - 1 + #right - 1 + 1) * gap -- плюс зазор между левой и правой группами
+    local k = math.max(0.5, math.min(1, (w - 32 - gaps) / sum)) -- в узком окне кнопки ужимаются
+    local clicked
+    local x = 16
+    for _, b in ipairs(specs) do
+      local bw = b.w * k
+      if draw_button(x, CHIP_Y, bw, CHIP_H, b.label, b.enabled ~= false, click, b.color, F_SMALL) then clicked = b.id end
+      x = x + bw + gap
+    end
+    x = w - 16
+    for i = #right, 1, -1 do
+      local b = right[i]
+      local bw = b.w * k
+      x = x - bw
+      if draw_button(x, CHIP_Y, bw, CHIP_H, b.label, b.enabled ~= false, click, b.color, F_SMALL) then clicked = b.id end
+      x = x - gap
+    end
+    if clicked == "recent" or clicked == "library" then set_source(clicked)
+    elseif clicked == "missing" then f_missing = not f_missing; after_filter_change()
+    elseif clicked == "age" then f_age = f_age % #AGE_STEPS + 1; after_filter_change()
+    elseif clicked == "all" then
       for _, it in ipairs(view) do if not it.fav then it.checked = true end end -- избранные защищены
-    elseif act_none then
+    elseif clicked == "none" then
       for _, it in ipairs(items) do it.checked = false end
+    elseif clicked == "folders" then
+      show_settings = not show_settings
+      edit = nil
     end
   end
 
@@ -1188,13 +1519,46 @@ local function draw()
       else
         draw_text("нет - клик или F2, чтобы добавить (Enter - сохранить)", note_x + 8, ty, col.dim)
       end
-      if click and not edit and mouse_in(note_x, note_y, note_w, note_h) then start_edit() end
+      if lclick and not edit and mouse_in(note_x, note_y, note_w, note_h) then start_edit() end
 
       local bx = w - 16 - BTN_W
       act_fav = draw_button(bx, info_y + 6, BTN_W, 24, it.fav and "★ Убрать из избранного" or "☆ В избранное",
-        true, click, nil, F_SMALL)
-      act_note = draw_button(bx, info_y + 33, BTN_W, 24, "Пометка (F2)", true, click, nil, F_SMALL)
-      act_reveal = draw_button(bx, info_y + 60, BTN_W, 24, "Показать в папке", it.exists, click, nil, F_SMALL)
+        true, lclick, nil, F_SMALL)
+      act_note = draw_button(bx, info_y + 33, BTN_W, 24, "Пометка (F2)", true, lclick, nil, F_SMALL)
+      act_reveal = draw_button(bx, info_y + 60, BTN_W, 24, "Показать в папке", it.exists, lclick, nil, F_SMALL)
+    end
+  end
+
+  -- окно «Папки»: закрывает список и панель проекта
+  local rm_dir, opt_click
+  if show_settings then
+    set_color(col.bg); gfx.rect(0, HEAD_H, w, foot_y - HEAD_H, 1)
+    set_color(col.border); gfx.rect(0, HEAD_H, w, 1, 1)
+    gfx.setfont(1, "Arial", F_TITLE)
+    draw_text("Папки для поиска проектов", 16, HEAD_H + 12, col.text)
+    gfx.setfont(1, "Arial", F_SMALL)
+    draw_text("Проекты (.rpp) ищутся в этих папках и во всех вложенных. Файлы проектов не изменяются.",
+      16, HEAD_H + 42, col.dim)
+    if #lib.dirs == 0 then
+      draw_text("Папок нет. Нажмите «Добавить папку…».", 16, SET_ROW_Y0 + 10, col.dim)
+    end
+    for i, d in ipairs(lib.dirs) do
+      local ry = SET_ROW_Y0 + (i - 1) * SET_ROW_H
+      if ry + SET_ROW_H > foot_y - 100 then break end
+      if i % 2 == 0 then set_color(col.row_alt); gfx.rect(0, ry, w, SET_ROW_H, 1) end
+      gfx.setfont(1, "Arial", F_ROW)
+      draw_text(clip_tail(d, w - 32 - 110), 16, ry + (SET_ROW_H - F_ROW) / 2 - 1, col.text)
+      if draw_button(w - 16 - 90, ry + 4, 90, 26, "Убрать", true, click, nil, F_SMALL) then rm_dir = i end
+    end
+    local options = {
+      { key = "skip_backups", y = foot_y - 84, label = "Пропускать папки Backups (копии и автосохранения REAPER)" },
+      { key = "with_bak", y = foot_y - 50, label = "Учитывать резервные копии .rpp-bak" },
+    }
+    for _, o in ipairs(options) do
+      draw_checkbox(16, o.y + 4, lib[o.key])
+      gfx.setfont(1, "Arial", F_ROW)
+      draw_text(o.label, 46, o.y + 5, col.text)
+      if click and mouse_in(16, o.y, w - 32, 28) then opt_click = o.key end
     end
   end
 
@@ -1205,27 +1569,51 @@ local function draw()
   gfx.setfont(1, "Arial", F_SMALL)
   draw_text(clip_tail(status, w - 32), 16, foot_y + 13, col.dim)
 
-  local n_missing, n_checked = count_missing_unprotected(), count_checked()
-  local target -- что откроет кнопка «Открыть»: единственный отмеченный, а если отметок нет - курсор
-  if n_checked == 1 then
-    for _, it in ipairs(view) do if it.checked then target = it end end
-  elseif n_checked == 0 then
-    target = cursor
-  end
-  local last_undo = undo_stack[#undo_stack]
   local bh, by, gap = 46, foot_y + 52, 10
-  local bw = (w - 32 - gap * 4) / 5
-  local act_auto = draw_button(16, by, bw, bh,
-    string.format("Убрать пропавшие (%d)", n_missing), n_missing > 0, click)
-  local act_open = draw_button(16 + (bw + gap), by, bw, bh, "Открыть", target ~= nil and target.exists, click, col.accent)
-  local act_del = draw_button(16 + (bw + gap) * 2, by, bw, bh,
-    string.format("Удалить выбранные (%d)", n_checked), n_checked > 0, click, col.btn_danger)
-  local act_undo = draw_button(16 + (bw + gap) * 3, by, bw, bh,
-    last_undo and string.format("Вернуть удалённые (%d)", #last_undo.removed) or "Вернуть удалённые",
-    last_undo ~= nil, click)
-  local act_close = draw_button(16 + (bw + gap) * 4, by, bw, bh, "Закрыть", true, click)
+  local act_auto, act_open, act_del, act_undo, act_close, act_scan, act_add, act_back
+  local target -- что откроет кнопка «Открыть»
+  local scan_label = lib.scan and "Остановить сканирование" or "Пересканировать"
+  local scan_enabled = lib.scan ~= nil or #lib.dirs > 0
+  if show_settings then
+    local bw = (w - 32 - gap * 3) / 4
+    act_add = draw_button(16, by, bw, bh, "Добавить папку…", true, click, col.accent)
+    act_scan = draw_button(16 + (bw + gap), by, bw, bh, scan_label, scan_enabled, click)
+    act_back = draw_button(16 + (bw + gap) * 2, by, bw, bh, "Назад к списку", true, click)
+    act_close = draw_button(16 + (bw + gap) * 3, by, bw, bh, "Закрыть", true, click)
+  elseif source == "library" then
+    target = cursor
+    local bw = (w - 32 - gap * 2) / 3
+    act_scan = draw_button(16, by, bw, bh, scan_label, scan_enabled, click)
+    act_open = draw_button(16 + (bw + gap), by, bw, bh, "Открыть", target ~= nil and target.exists, click, col.accent)
+    act_close = draw_button(16 + (bw + gap) * 2, by, bw, bh, "Закрыть", true, click)
+  else
+    local n_missing, n_checked = count_missing_unprotected(), count_checked()
+    -- «Открыть»: единственный отмеченный проект, а если отметок нет - проект под курсором
+    if n_checked == 1 then
+      for _, it in ipairs(view) do if it.checked then target = it end end
+    elseif n_checked == 0 then
+      target = cursor
+    end
+    local last_undo = undo_stack[#undo_stack]
+    local bw = (w - 32 - gap * 4) / 5
+    act_auto = draw_button(16, by, bw, bh,
+      string.format("Убрать пропавшие (%d)", n_missing), n_missing > 0, click)
+    act_open = draw_button(16 + (bw + gap), by, bw, bh, "Открыть", target ~= nil and target.exists, click, col.accent)
+    act_del = draw_button(16 + (bw + gap) * 2, by, bw, bh,
+      string.format("Удалить выбранные (%d)", n_checked), n_checked > 0, click, col.btn_danger)
+    act_undo = draw_button(16 + (bw + gap) * 3, by, bw, bh,
+      last_undo and string.format("Вернуть удалённые (%d)", #last_undo.removed) or "Вернуть удалённые",
+      last_undo ~= nil, click)
+    act_close = draw_button(16 + (bw + gap) * 4, by, bw, bh, "Закрыть", true, click)
+  end
 
-  if fav_now then
+  if opt_click then
+    lib[opt_click] = not lib[opt_click]
+    lib.save_settings()
+    status = "Настройка применится при следующем сканировании."
+  elseif rm_dir then
+    lib.remove_dir(rm_dir)
+  elseif fav_now then
     toggle_fav(fav_now)
   elseif open_now then
     open_project(open_now)
@@ -1235,6 +1623,12 @@ local function draw()
     start_edit()
   elseif act_reveal then
     reveal_in_folder(cursor)
+  elseif act_add then
+    lib.add_folder_dialog()
+  elseif act_scan then
+    if lib.scan then lib.stop_scan() else lib.start_scan() end
+  elseif act_back then
+    show_settings = false
   elseif act_auto then
     local doomed = {}
     for _, it in ipairs(view) do if not it.exists and not it.fav then doomed[it.path] = true end end
@@ -1288,6 +1682,7 @@ local function loop()
     if ch == 0 then break end
     if handle_key(ch) == "close" then gfx.quit(); return end
   end
+  if lib.scan then lib.scan_step() end
   if (gfx.w ~= saved_w or gfx.h ~= saved_h) and gfx.w >= MIN_W and gfx.h >= MIN_H then
     saved_w, saved_h = gfx.w, gfx.h
     reaper.SetExtState(EXT_SECTION, "win_w", tostring(math.floor(saved_w)), true)
