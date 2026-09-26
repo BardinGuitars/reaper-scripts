@@ -1,0 +1,7 @@
+# Не для публикации в GitHub (локальная работа)
+SSM/SSM_DI_Guitar_Align.lua
+gtr_di/
+Effects/
+tests/
+tools/
+.github/

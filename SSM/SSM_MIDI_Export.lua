@@ -16,7 +16,7 @@
 --       экспортируемый фрагмент.
 --   Имя файла (галочка, отдельно для режимов «треки» и «айтемы»):
 --     - имя трека; имя айтема (имя тейка; для трека - его первого айтема);
---       или оба вместе: «Трек - Айтем». Если у айтема нет имени, берётся
+--       или оба вместе: «Трек + Айтем». Если у айтема нет имени, берётся
 --       имя трека (для айтемов - «Трек - 02» по номеру в списке).
 --   Дополнительно:
 --     - только выделенные ноты (те, что выделены в MIDI-редакторе);
@@ -690,7 +690,7 @@ local function draw()
   local cur_naming = cfg.mode == "tracks" and cfg.naming_tracks or cfg.naming_items
   local name_labels = cfg.mode == "tracks"
     and { track = "Имя трека", item = "Имя 1-го айтема", both = "Трек - 1-й айтем" }
-    or { track = "Имя трека", item = "Имя айтема", both = "Трек - айтем" }
+    or { track = "Имя трека", item = "Имя айтема", both = "Трек + айтем" }
   local nw = math.floor((w - 110 - 16) / 3)
   for i, key in ipairs(NAMINGS) do
     if check_row(110 + (i - 1) * nw, Y_NAME, nw - 8, name_labels[key], cur_naming == key, click) and cur_naming ~= key then
