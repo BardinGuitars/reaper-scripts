@@ -1,5 +1,5 @@
 -- @description SSM_Project_Manager
--- @version 3.1
+-- @version 3.2
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
@@ -38,7 +38,10 @@
 --     - для проекта под курсором: версия REAPER, темп, частота, число треков,
 --       примерная длина, плагины (читается из .rpp);
 --     - «Показать в папке» открывает проводник (Finder) на файле проекта.
---   Открытие: двойной клик, Enter или кнопка «Открыть» - в новой вкладке REAPER.
+--   Открытие: двойной клик, Enter или кнопка «Открыть». Галочка «Открывать в новой
+--   вкладке» справа над кнопками: включена - проект открывается в новой вкладке
+--   REAPER; выключена - в текущей (тогда REAPER сам спросит, сохранить ли
+--   несохранённые изменения текущего проекта).
 --   Клавиши: стрелки, PgUp/PgDn, Home/End - курсор; Tab или Insert - отметить
 --   и перейти ниже; Shift+клик - отметить диапазон; Esc - очистить поиск (или
 --   закрыть окно, если поиск пуст).
@@ -52,6 +55,9 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.2 Выбор, как открывать проект: в новой вкладке или в текущей (галочка
+--   «Открывать в новой вкладке»). В текущей вкладке REAPER спрашивает о
+--   сохранении несохранённого проекта.
 --   3.1 Полосу прокрутки справа можно тянуть мышью, клик по дорожке переносит
 --   ползунок в это место.
 --   3.0 Режим «Все проекты»: поиск по всем .rpp из выбранных папок. Кнопка
@@ -791,13 +797,23 @@ local function restore_last()
   status = string.format("Возвращено в список: %d. Меню REAPER обновится после перезапуска.", back)
 end
 
--- Открывает проект в НОВОЙ вкладке (действие 40859), чтобы не трогать текущий
--- проект; "noprompt:" - без вопроса о сохранении пустой вкладки.
+-- Как открывать проект: в новой вкладке (по умолчанию) или в текущей
+local open_new_tab = reaper.GetExtState(EXT_SECTION, "open_new_tab") ~= "0"
+
+-- Новая вкладка (действие 40859): текущий проект не трогается; "noprompt:" - без вопроса
+-- о сохранении пустой вкладки. В текущей вкладке имя без "noprompt:" - REAPER сам
+-- спросит, сохранить ли несохранённые изменения, ничего не потеряется молча.
 local function open_project(it)
   if not it or not it.exists then return end
-  reaper.Main_OnCommand(40859, 0)
-  reaper.Main_openProject("noprompt:" .. it.path)
-  status = "Открыт в новой вкладке: " .. (it.path:match("([^\\/]+)$") or it.path)
+  local name = it.path:match("([^\\/]+)$") or it.path
+  if open_new_tab then
+    reaper.Main_OnCommand(40859, 0)
+    reaper.Main_openProject("noprompt:" .. it.path)
+    status = "Открыт в новой вкладке: " .. name
+  else
+    reaper.Main_openProject(it.path)
+    status = "Открыт в текущей вкладке: " .. name
+  end
 end
 
 -- Показывает файл проекта в проводнике / Finder
@@ -1594,8 +1610,23 @@ local function draw()
   set_color(col.panel); gfx.rect(0, foot_y, w, FOOT_H, 1)
   set_color(col.border); gfx.rect(0, foot_y, w, 1, 1)
 
+  -- галочка «Открывать в новой вкладке» - справа в строке статуса
+  local tab_w = 260
+  if not show_settings then
+    local tx = w - 16 - tab_w
+    draw_checkbox(tx, foot_y + 6, open_new_tab)
+    gfx.setfont(1, "Arial", F_SMALL)
+    draw_text("Открывать в новой вкладке", tx + CB + 8, foot_y + 9, col.text)
+    if click and mouse_in(tx, foot_y + 4, tab_w, 26) then
+      open_new_tab = not open_new_tab
+      reaper.SetExtState(EXT_SECTION, "open_new_tab", open_new_tab and "1" or "0", true)
+      status = open_new_tab and "Проекты открываются в новой вкладке."
+        or "Проекты открываются в текущей вкладке: REAPER спросит о сохранении."
+    end
+  end
+
   gfx.setfont(1, "Arial", F_SMALL)
-  draw_text(clip_tail(status, w - 32), 16, foot_y + 13, col.dim)
+  draw_text(clip_tail(status, w - 32 - (show_settings and 0 or tab_w + 12)), 16, foot_y + 13, col.dim)
 
   local bh, by, gap = 46, foot_y + 52, 10
   local act_auto, act_open, act_del, act_undo, act_close, act_scan, act_add, act_back
