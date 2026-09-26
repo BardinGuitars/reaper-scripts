@@ -1,5 +1,5 @@
 -- @description SSM_MIDI_Export
--- @version 1.0
+-- @version 1.1
 -- @author @ssm_metalmix
 -- @about
 --   🎹 Экспорт MIDI в отдельные .mid файлы: каждый выделенный трек или каждый
@@ -14,6 +14,10 @@
 --       переходы, записываются ступенями по четвертям);
 --     - маркеры проекта (регионы не переносятся) - только те, что попадают в
 --       экспортируемый фрагмент.
+--   Имя файла (галочка, отдельно для режимов «треки» и «айтемы»):
+--     - имя трека; имя айтема (имя тейка; для трека - его первого айтема);
+--       или оба вместе: «Трек - Айтем». Если у айтема нет имени, берётся
+--       имя трека (для айтемов - «Трек - 02» по номеру в списке).
 --   Дополнительно:
 --     - только выделенные ноты (те, что выделены в MIDI-редакторе);
 --     - пропускать замьюченные события;
@@ -30,13 +34,15 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   1.1 Галочки «какое имя брать для файла»: имя трека, имя айтема или оба
+--   вместе. Свой выбор для режима треков и для режима айтемов.
 --   1.0 Релиз: экспорт выделенных треков или MIDI-айтемов в отдельные файлы,
 --   темп и маркеры на выбор, обрезка пустоты в начале, политика имён файлов.
 
 local TITLE = "SSM MIDI Export"
 local EXT_SECTION = "SSM_MidiExport"
 local OUT_PPQ = 960                       -- разрешение в файле: тиков на четверть
-local WIN_W, WIN_H = 760, 720
+local WIN_W, WIN_H = 760, 760
 local MIN_W, MIN_H = 620, 520
 local ROW_H, FOOT_H = 30, 104
 local F_ROW, F_TITLE, F_SMALL, F_BTN = 17, 20, 15, 17
@@ -50,7 +56,8 @@ local Y_MODE = 70
 local Y_OPT = { 108, 140, 172 }
 local Y_FOLDER, FOLDER_H = 214, 32
 local Y_POLICY = 258
-local Y_LIST_HEAD, LIST_Y = 300, 328
+local Y_NAME = 296
+local Y_LIST_HEAD, LIST_Y = 338, 366
 
 local col = {
   bg = { 0.13, 0.14, 0.16 }, panel = { 0.17, 0.18, 0.21 }, row_alt = { 0.15, 0.16, 0.19 },
@@ -68,9 +75,12 @@ local cfg = {
   mode = "tracks",       -- "tracks" | "items"
   tempo = true, markers = true, only_sel = false, skip_muted = true, trim = false, open_after = false,
   policy = "number",     -- "number" | "overwrite" | "skip"
+  naming_tracks = "track", -- из чего строится имя файла в режиме треков: "track" | "item" | "both"
+  naming_items = "both",   -- то же в режиме айтемов (так было до появления настройки)
   folder = "",
 }
 local BOOL_KEYS = { "tempo", "markers", "only_sel", "skip_muted", "trim", "open_after" }
+local NAMINGS = { "track", "item", "both" }
 local POLICIES = {
   { key = "number", label = "добавить номер" },
   { key = "overwrite", label = "перезаписать" },
@@ -86,6 +96,10 @@ local function load_cfg()
   end
   local p = reaper.GetExtState(EXT_SECTION, "policy")
   for _, pol in ipairs(POLICIES) do if pol.key == p then cfg.policy = p end end
+  for _, k in ipairs({ "naming_tracks", "naming_items" }) do
+    local v = reaper.GetExtState(EXT_SECTION, k)
+    for _, n in ipairs(NAMINGS) do if n == v then cfg[k] = v end end
+  end
   cfg.folder = reaper.GetExtState(EXT_SECTION, "folder")
 end
 
@@ -93,6 +107,8 @@ local function save_cfg()
   reaper.SetExtState(EXT_SECTION, "mode", cfg.mode, true)
   for _, k in ipairs(BOOL_KEYS) do reaper.SetExtState(EXT_SECTION, k, cfg[k] and "1" or "0", true) end
   reaper.SetExtState(EXT_SECTION, "policy", cfg.policy, true)
+  reaper.SetExtState(EXT_SECTION, "naming_tracks", cfg.naming_tracks, true)
+  reaper.SetExtState(EXT_SECTION, "naming_items", cfg.naming_items, true)
   reaper.SetExtState(EXT_SECTION, "folder", cfg.folder, true)
 end
 
@@ -362,6 +378,18 @@ local function note_count(take)
   return n or 0
 end
 
+-- Имя файла по выбранной схеме. tname - имя трека, iname - имя айтема (может быть
+-- пустым), idx - запасной номер для айтемов без имени (nil для треков).
+local function make_label(naming, tname, iname, idx)
+  if naming == "track" then return tname end
+  if iname ~= "" then return naming == "item" and iname or (tname .. " - " .. iname) end
+  return idx and (tname .. " - " .. idx) or tname
+end
+
+local function take_label(tk)
+  return (reaper.GetTakeName(tk) or ""):gsub("%.[Mm][Ii][Dd][Ii]?$", "")
+end
+
 local function scan_selection()
   local list = {}
   scan_stats.tracks_selected = reaper.CountSelectedTracks(0)
@@ -377,8 +405,16 @@ local function scan_selection()
       end
       if #units > 0 then
         local _, name = reaper.GetTrackName(tr)
+        -- «имя айтема» для трека - имя самого раннего айтема, у которого оно есть
+        local iname, best = "", math.huge
+        for _, u in ipairs(units) do
+          local nm = take_label(u.take)
+          local at = reaper.GetMediaItemInfo_Value(u.item, "D_POSITION")
+          if nm ~= "" and at < best then iname, best = nm, at end
+        end
+        local label = make_label(cfg.naming_tracks, name, iname, nil)
         list[#list + 1] = {
-          key = tostring(tr), file = sanitize(name), label = name, units = units,
+          key = tostring(tr), file = sanitize(label), label = label, units = units,
           info = string.format("айтемов: %d, нот: %d", #units, notes),
         }
       end
@@ -389,9 +425,7 @@ local function scan_selection()
       local tk = midi_take_of(it)
       if tk then
         local _, tname = reaper.GetTrackName(reaper.GetMediaItemTrack(it))
-        local take_name = (reaper.GetTakeName(tk) or ""):gsub("%.[Mm][Ii][Dd][Ii]?$", "")
-        local part = take_name ~= "" and take_name or string.format("%02d", #list + 1)
-        local label = tname .. " - " .. part
+        local label = make_label(cfg.naming_items, tname, take_label(tk), string.format("%02d", #list + 1))
         local len = reaper.GetMediaItemInfo_Value(it, "D_LENGTH")
         list[#list + 1] = {
           key = tostring(it), file = sanitize(label), label = label, units = { { item = it, take = tk } },
@@ -649,6 +683,22 @@ local function draw()
   local policy_label = ""
   for _, p in ipairs(POLICIES) do if p.key == cfg.policy then policy_label = p.label end end
   local act_policy = draw_button(16 + 260, Y_POLICY, 200, 28, policy_label, true, click, nil, F_SMALL)
+
+  -- какое имя брать для файла (отдельный выбор для треков и для айтемов)
+  gfx.setfont(1, "Arial", F_SMALL)
+  draw_text("Имя файла:", 16, Y_NAME + 6, col.dim)
+  local cur_naming = cfg.mode == "tracks" and cfg.naming_tracks or cfg.naming_items
+  local name_labels = cfg.mode == "tracks"
+    and { track = "Имя трека", item = "Имя 1-го айтема", both = "Трек - 1-й айтем" }
+    or { track = "Имя трека", item = "Имя айтема", both = "Трек - айтем" }
+  local nw = math.floor((w - 110 - 16) / 3)
+  for i, key in ipairs(NAMINGS) do
+    if check_row(110 + (i - 1) * nw, Y_NAME, nw - 8, name_labels[key], cur_naming == key, click) and cur_naming ~= key then
+      if cfg.mode == "tracks" then cfg.naming_tracks = key else cfg.naming_items = key end
+      save_cfg()
+      scan_selection()
+    end
+  end
 
   -- список
   local todo = included()
