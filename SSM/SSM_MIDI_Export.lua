@@ -1,5 +1,5 @@
 -- @description SSM_MIDI_Export
--- @version 1.2
+-- @version 1.3
 -- @author @ssm_metalmix
 -- @about
 --   🎹 Экспорт MIDI в отдельные .mid файлы: каждый выделенный трек или каждый
@@ -36,13 +36,27 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   1.3 Номер версии в заголовке окна (видно, какая версия запущена).
 --   1.2 Галочка «Закрыть окно после экспорта».
 --   1.1 Галочки «какое имя брать для файла»: имя трека, имя айтема или оба
 --   вместе. Свой выбор для режима треков и для режима айтемов.
 --   1.0 Релиз: экспорт выделенных треков или MIDI-айтемов в отдельные файлы,
 --   темп и маркеры на выбор, обрезка пустоты в начале, политика имён файлов.
 
-local TITLE = "SSM MIDI Export"
+-- Номер версии берётся из строки "@version" самого скрипта и показывается в заголовке
+-- окна: сразу видно, какая версия запущена (после обновления окно нужно открыть заново).
+local function script_version()
+  local ok, ver = pcall(function()
+    local src = debug.getinfo(1, "S").source:gsub("^@", "")
+    local f = io.open(src, "rb")
+    if not f then return nil end
+    local head = f:read(2048)
+    f:close()
+    return head and head:match("@version%s+([%d%.]+)")
+  end)
+  return ok and ver or nil
+end
+local TITLE = "SSM MIDI Export" .. (script_version() and (" " .. script_version()) or "")
 local EXT_SECTION = "SSM_MidiExport"
 local OUT_PPQ = 960                       -- разрешение в файле: тиков на четверть
 local WIN_W, WIN_H = 760, 792

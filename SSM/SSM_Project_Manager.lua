@@ -1,5 +1,5 @@
 -- @description SSM_Project_Manager
--- @version 3.2
+-- @version 3.3
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
@@ -55,6 +55,7 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.3 Номер версии в заголовке окна (видно, какая версия запущена).
 --   3.2 Выбор, как открывать проект: в новой вкладке или в текущей (галочка
 --   «Открывать в новой вкладке»). В текущей вкладке REAPER спрашивает о
 --   сохранении несохранённого проекта.
@@ -85,7 +86,20 @@
 --   1.1 Окно со списком: ручной выбор ненужных проектов галочками.
 --   1.0 Релиз: автоматическое удаление несуществующих проектов.
 
-local TITLE = "SSM Project Manager"
+-- Номер версии берётся из строки "@version" самого скрипта и показывается в заголовке
+-- окна: сразу видно, какая версия запущена (после обновления окно нужно открыть заново).
+local function script_version()
+  local ok, ver = pcall(function()
+    local src = debug.getinfo(1, "S").source:gsub("^@", "")
+    local f = io.open(src, "rb")
+    if not f then return nil end
+    local head = f:read(2048)
+    f:close()
+    return head and head:match("@version%s+([%d%.]+)")
+  end)
+  return ok and ver or nil
+end
+local TITLE = "SSM Project Manager" .. (script_version() and (" " .. script_version()) or "")
 local WIN_W, WIN_H = 1000, 820
 local MIN_W, MIN_H = 720, 560
 local HEAD_H, INFO_H, FOOT_H, ROW_H = 192, 90, 116, 34
