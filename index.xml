@@ -262,5 +262,20 @@
         <source main="main" file="../SSM_Unused_Plugins_Remover.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Unused_Plugins_Remover.lua</source>
       </version>
     </reapack>
+
+    <reapack name="SSM_MIDI_Export.lua" type="script">
+      <metadata>
+        <description>SSM_MIDI_Export</description>
+      </metadata>
+      <version name="1.0" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.0 Релиз: экспорт выделенных треков или MIDI-айтемов в отдельные .mid файлы в выбранную папку. Галочки: вшить темп и размер, вшить маркеры, только выделенные ноты, пропускать замьюченные, начать с нуля, что делать с существующими файлами, открыть папку после экспорта. Список файлов с возможностью исключить строку.
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_MIDI_Export.lua -->
+        <source main="main" file="../SSM_MIDI_Export.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_MIDI_Export.lua</source>
+      </version>
+    </reapack>
   </category>
 </index>
