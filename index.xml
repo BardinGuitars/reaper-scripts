@@ -282,6 +282,17 @@
       <metadata>
         <description>SSM_MIDI_Export</description>
       </metadata>
+      <version name="1.2" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.0 Релиз: экспорт выделенных треков или MIDI-айтемов в отдельные .mid файлы в выбранную папку. Галочки: вшить темп и размер, вшить маркеры, только выделенные ноты, пропускать замьюченные, начать с нуля, что делать с существующими файлами, открыть папку после экспорта. Список файлов с возможностью исключить строку.
+1.1 Галочки «какое имя брать для файла»: имя трека, имя айтема или оба вместе (свой выбор для режима треков и для режима айтемов).
+1.2 Галочка «Закрыть окно после экспорта» (окно закрывается, только если всё создано без пропусков и ошибок).
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_MIDI_Export.lua -->
+        <source main="main" file="../SSM_MIDI_Export.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_MIDI_Export.lua</source>
+      </version>
       <version name="1.1" author="@ssm_metalmix">
 <changelog>
 <![CDATA[

@@ -1,5 +1,5 @@
 -- @description SSM_MIDI_Export
--- @version 1.1
+-- @version 1.2
 -- @author @ssm_metalmix
 -- @about
 --   🎹 Экспорт MIDI в отдельные .mid файлы: каждый выделенный трек или каждый
@@ -24,7 +24,9 @@
 --     - начать с нуля: пустое место перед первым айтемом обрезается, темп и
 --       маркеры сдвигаются вместе с нотами (иначе позиции как в проекте);
 --     - что делать, если файл уже есть: добавить номер / перезаписать / пропустить;
---     - открыть папку после экспорта.
+--     - открыть папку после экспорта;
+--     - закрыть окно после экспорта (только если всё создано без пропусков и
+--       ошибок - иначе окно остаётся, чтобы можно было прочитать сообщение).
 --   В списке видно, какие файлы будут созданы; строку можно исключить галочкой.
 --   Список обновляется сам при смене выделения. Проект не изменяется.
 --   Ограничения: текстовые события и sysex в файл не переносятся; зацикленные
@@ -34,6 +36,7 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   1.2 Галочка «Закрыть окно после экспорта».
 --   1.1 Галочки «какое имя брать для файла»: имя трека, имя айтема или оба
 --   вместе. Свой выбор для режима треков и для режима айтемов.
 --   1.0 Релиз: экспорт выделенных треков или MIDI-айтемов в отдельные файлы,
@@ -42,7 +45,7 @@
 local TITLE = "SSM MIDI Export"
 local EXT_SECTION = "SSM_MidiExport"
 local OUT_PPQ = 960                       -- разрешение в файле: тиков на четверть
-local WIN_W, WIN_H = 760, 760
+local WIN_W, WIN_H = 760, 792
 local MIN_W, MIN_H = 620, 520
 local ROW_H, FOOT_H = 30, 104
 local F_ROW, F_TITLE, F_SMALL, F_BTN = 17, 20, 15, 17
@@ -53,11 +56,11 @@ local MAX_TEMPO_STEPS = 4000
 
 -- Вертикальная раскладка окна
 local Y_MODE = 70
-local Y_OPT = { 108, 140, 172 }
-local Y_FOLDER, FOLDER_H = 214, 32
-local Y_POLICY = 258
-local Y_NAME = 296
-local Y_LIST_HEAD, LIST_Y = 338, 366
+local Y_OPT = { 108, 140, 172, 204 }
+local Y_FOLDER, FOLDER_H = 246, 32
+local Y_POLICY = 290
+local Y_NAME = 328
+local Y_LIST_HEAD, LIST_Y = 370, 398
 
 local col = {
   bg = { 0.13, 0.14, 0.16 }, panel = { 0.17, 0.18, 0.21 }, row_alt = { 0.15, 0.16, 0.19 },
@@ -73,13 +76,13 @@ local IS_WIN = (reaper.GetOS() or ""):find("^Win") ~= nil
 ----------------------------------------------------------------------
 local cfg = {
   mode = "tracks",       -- "tracks" | "items"
-  tempo = true, markers = true, only_sel = false, skip_muted = true, trim = false, open_after = false,
+  tempo = true, markers = true, only_sel = false, skip_muted = true, trim = false, open_after = false, close_after = false,
   policy = "number",     -- "number" | "overwrite" | "skip"
   naming_tracks = "track", -- из чего строится имя файла в режиме треков: "track" | "item" | "both"
   naming_items = "both",   -- то же в режиме айтемов (так было до появления настройки)
   folder = "",
 }
-local BOOL_KEYS = { "tempo", "markers", "only_sel", "skip_muted", "trim", "open_after" }
+local BOOL_KEYS = { "tempo", "markers", "only_sel", "skip_muted", "trim", "open_after", "close_after" }
 local NAMINGS = { "track", "item", "both" }
 local POLICIES = {
   { key = "number", label = "добавить номер" },
@@ -516,6 +519,8 @@ local function run_export()
   if failed > 0 then msg = msg .. string.format(" Не удалось записать: %d (проверьте папку).", failed) end
   status = msg
   if cfg.open_after and written > 0 then open_folder(cfg.folder) end
+  -- окно закрывается, только если всё прошло гладко: иначе сообщение пропало бы
+  return cfg.close_after and written > 0 and #skipped == 0 and failed == 0
 end
 
 local function pick_folder()
@@ -613,7 +618,8 @@ local OPTIONS = {
   { key = "only_sel", label = "Только выделенные ноты", col = 1, row = 3 },
   { key = "skip_muted", label = "Пропускать замьюченные события", col = 2, row = 1 },
   { key = "trim", label = "Начать с нуля (обрезать пустоту в начале)", col = 2, row = 2 },
-  { key = "open_after", label = "Открыть папку после экспорта", col = 2, row = 3 },
+  { key = "open_after", label = "Открыть папку после экспорта", col = 1, row = 4 },
+  { key = "close_after", label = "Закрыть окно после экспорта", col = 2, row = 4 },
 }
 
 local function draw()
@@ -798,7 +804,7 @@ local function draw()
     end
     save_cfg()
   elseif act_export then
-    run_export()
+    if run_export() then return "close" end
   elseif act_close then
     return "close"
   end
@@ -820,7 +826,7 @@ local function loop()
     if ch < 0 then gfx.quit(); return end
     if ch == 0 then break end
     if ch == 27 then gfx.quit(); return end
-    if ch == 13 then run_export() end
+    if ch == 13 and run_export() then gfx.quit(); return end
   end
   if (gfx.w ~= saved_w or gfx.h ~= saved_h) and gfx.w >= MIN_W and gfx.h >= MIN_H then
     saved_w, saved_h = gfx.w, gfx.h
