@@ -1,7 +1,18 @@
-# Не для публикации в GitHub (локальная работа)
+# Не для публикации в GitHub (локальная работа). Всё перечисленное ниже хранится в отдельном
+# локальном git (.git-private) и в этот репозиторий попадать не должно.
 SSM/SSM_DI_Guitar_Align.lua
+SSM/SSM_DI_Detector.lua
+SSM/SSM_AI_Drummer.lua
+SSM/*.rar
 gtr_di/
 Effects/
 tests/
 tools/
+docs/
+out/
+CLAUDE.md
 .github/
+.claude/
+.git-private/
+__pycache__/
+*.pyc
