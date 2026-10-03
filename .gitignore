@@ -16,3 +16,4 @@ CLAUDE.md
 .git-private/
 __pycache__/
 *.pyc
+paths.local.json
