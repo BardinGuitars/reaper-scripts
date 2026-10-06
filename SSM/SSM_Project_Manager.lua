@@ -1,9 +1,13 @@
 -- @description SSM_Project_Manager
--- @version 3.3
+-- @version 4.0
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
 --   папок - поиск, сортировка, избранное, пометки, быстрое открытие, чистка.
+--
+--   Нужна ReaImGui (расширение REAPER): REAPER -> Extensions -> ReaPack -> Browse
+--   packages -> ReaImGui (репозиторий ReaTeam Extensions). Без неё скрипт
+--   подскажет, как её поставить.
 --
 --   Источник списка (второй ряд кнопок)
 --     - «Недавние» - список Recent projects из reaper.ini (чистка, удаление);
@@ -55,6 +59,10 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   4.0 Окно переписано на ReaImGui: быстрее на длинных списках (рисуются только
+--   видимые строки), обычная полоса прокрутки и ввод текста (вставка Ctrl+V без SWS).
+--   Нужна ReaImGui 0.10 или новее (ReaPack, репозиторий ReaTeam Extensions).
+--   Все функции, избранное, пометки, индекс «Всех проектов» и ширины колонок - прежние.
 --   3.3 Номер версии в заголовке окна (видно, какая версия запущена).
 --   3.2 Выбор, как открывать проект: в новой вкладке или в текущей (галочка
 --   «Открывать в новой вкладке»). В текущей вкладке REAPER спрашивает о
@@ -102,10 +110,7 @@ end
 local TITLE = "SSM Project Manager" .. (script_version() and (" " .. script_version()) or "")
 local WIN_W, WIN_H = 1000, 820
 local MIN_W, MIN_H = 720, 560
-local HEAD_H, INFO_H, FOOT_H, ROW_H = 192, 90, 116, 34
-local SEARCH_Y, SEARCH_H = 66, 34
-local SORT_Y, SORT_H = 110, 34
-local CHIP_Y, CHIP_H = 152, 30
+local INFO_H, FOOT_H, ROW_H = 90, 116, 34
 local EXT_SECTION = "SSM_ProjectManager"
 local OLD_EXT_SECTION = "SSM_RecentCleanup" -- настройки прежнего названия скрипта
 local COLS_H = 26 -- строка заголовков колонок под шапкой
@@ -113,11 +118,10 @@ local COL_DEF = { name = 220, date = 100, size = 84 } -- стандартная 
 local COL_MIN = { name = 60, path = 100, date = 70, size = 56 }
 local INDEX_NAME = "SSM_ProjectManager_index.txt" -- индекс «Всех проектов», рядом с reaper.ini
 local SCAN_BUDGET, SCAN_MAX_DEPTH = 0.02, 20      -- секунд на кадр; глубина вложенности папок
-local SET_ROW_Y0, SET_ROW_H = HEAD_H + 70, 34     -- окно «Папки»: первая строка и высота строки
-local F_ROW, F_TITLE, F_SMALL, F_BTN, F_SORT = 17, 20, 15, 17, 16
+local F_ROW, F_TITLE, F_SMALL = 17, 20, 15 -- размеры шрифта окна, пикселей
 local CB = 20 -- сторона чекбокса
-local STAR_X, STAR_W = 44, 22
-local TEXT_X = 74 -- начало пути в строке списка
+local STAR_X, STAR_W = 28, 22 -- звёздочка: от левого края колонок списка
+local TEXT_X = 58 -- начало имени в строке списка (от левого края колонок)
 local BTN_W = 190 -- ширина кнопок панели проекта
 local NOTE_LABEL_W = 78
 local DOUBLE_CLICK = 0.4 -- секунд
@@ -131,12 +135,6 @@ local col = {
   border = { 0.36, 0.38, 0.44 }, danger = { 0.95, 0.42, 0.42 },
   btn = { 0.24, 0.26, 0.31 }, btn_hover = { 0.31, 0.34, 0.40 }, btn_off = { 0.18, 0.19, 0.22 },
   btn_danger = { 0.62, 0.24, 0.24 }, star = { 1.0, 0.80, 0.25 }, tag = { 0.55, 0.75, 1.0 },
-}
-
--- Коды клавиш gfx.getchar (многобайтные значения из документации REAPER)
-local KEY = {
-  up = 30064, down = 1685026670, pgup = 1885828464, pgdn = 1885824110,
-  home = 1752132965, ["end"] = 6647396, ins = 6909555, f2 = 26162,
 }
 
 ----------------------------------------------------------------------
@@ -210,7 +208,6 @@ end
 local status = ""
 local query = ""           -- строка поиска
 local backup_done = false
-local last_cap = 0
 local edit = nil           -- редактирование пометки: { it = проект, buf = текст }
 local cursor = nil         -- проект под курсором (панель проекта, Enter, стрелки)
 local anchor = nil         -- от него считается диапазон Shift+клик
@@ -354,7 +351,7 @@ end
 
 local items = {}
 local view = {} -- то, что видно в списке: items после сортировки, поиска и фильтров
-local scroll = 0
+local scroll_reset = false -- после поиска, фильтров и смены сортировки список возвращается наверх
 
 local function index_of(it)
   for i, v in ipairs(view) do if v == it then return i end end
@@ -398,7 +395,7 @@ local function after_filter_change()
   local visible = {}
   for _, it in ipairs(view) do visible[it] = true end
   for _, it in ipairs(items) do if not visible[it] then it.checked = false end end
-  scroll = 0
+  scroll_reset = true
 end
 
 local function set_query(q)
@@ -417,7 +414,7 @@ local function set_sort(key)
   reaper.SetExtState(EXT_SECTION, "sort_key", sort_key, true)
   reaper.SetExtState(EXT_SECTION, "sort_desc", sort_desc and "1" or "0", true)
   apply_sort()
-  scroll = 0
+  scroll_reset = true
 end
 
 local function set_note_of(it, text)
@@ -562,7 +559,7 @@ do
     cursor, anchor = nil, nil
     update_has_dates()
     apply_sort()
-    scroll = 0
+    scroll_reset = true
   end
 
   function lib.ensure_loaded()
@@ -713,7 +710,7 @@ set_source = function(src)
   cursor, anchor, last_click_it = nil, nil, nil
   update_has_dates()
   apply_sort()
-  scroll = 0
+  scroll_reset = true
 end
 
 local function count_missing()
@@ -991,7 +988,7 @@ end
 -- Положение колонок для окна шириной w. Без js_ReaScriptAPI даты нет - колонка
 -- «Дата» скрыта. В узком окне имя/дата/размер временно ужимаются, путь не меньше минимума.
 local function layout(w)
-  local right = w - 26 -- справа остаётся место под полосу прокрутки
+  local right = w -- w - ширина колонок от их левого края (справа уже оставлено место под полосу прокрутки)
   local avail = right - TEXT_X
   local nw, dw, sw = col_w.name, has_dates and col_w.date or 0, col_w.size
   local fixed = nw + dw + sw
@@ -1033,34 +1030,29 @@ local function apply_drag(kind, start, dx)
   end
 end
 
-local sb_drag = nil                -- пока тащат ползунок прокрутки: смещение мыши от его верха
-local col_drag = nil               -- { kind, x0, start } пока разделитель тащат
-local last_div_click_t = -1e9
+local col_drag = nil               -- { kind, start } пока разделитель тащат
 
 ----------------------------------------------------------------------
--- Ввод с клавиатуры
+-- Ввод пометки
 ----------------------------------------------------------------------
--- Символ из кода gfx.getchar: ASCII и Latin-1 - как есть, остальной Unicode
--- REAPER отдаёт как 'u'<<24 + код (кириллица - 0x75000400...); служебные клавиши
--- (стрелки, F1..F12) - большие/особые коды и символами не считаются
-local function key_to_codepoint(ch)
-  if (ch >= 32 and ch <= 126) or (ch >= 160 and ch <= 255) then return ch end
-  local base = 0x75000000
-  if ch >= base + 256 and ch <= base + 0x10FFFF then return ch - base end
-  if ch >= 0x400 and ch <= 0x4FF then return ch end -- кириллица без упаковки
-  return nil
-end
-
 local NOTE_MAX = 200 -- байт
 
+-- Обрезка строки до max байт без разрыва символа UTF-8
+local function cut_utf8(s, max)
+  if #s <= max then return s end
+  local i = max
+  while i > 0 and ((s:byte(i + 1) or 0) & 0xC0) == 0x80 do i = i - 1 end
+  return s:sub(1, i)
+end
+
 local function start_edit()
-  if cursor then edit = { it = cursor, buf = cursor.note } end
+  if cursor and not edit then edit = { it = cursor, buf = cursor.note, focus = true } end
 end
 
 local function commit_edit()
   if not edit then return end
   local it = edit.it
-  local text = edit.buf:gsub("^%s+", ""):gsub("%s+$", "")
+  local text = cut_utf8(edit.buf:gsub("^%s+", ""):gsub("%s+$", ""), NOTE_MAX)
   edit = nil
   if text ~= it.note then
     set_note_of(it, text)
@@ -1068,68 +1060,10 @@ local function commit_edit()
   end
 end
 
--- Набор текста: в поле пометки, если она редактируется, иначе в строку поиска
-local function type_char(ch)
-  local target = edit and edit.buf or query
-  local new
-  if ch == 8 then -- Backspace: убрать последний символ (в UTF-8 это до 4 байт)
-    local off = utf8.offset(target, -1)
-    new = off and target:sub(1, off - 1) or ""
-  elseif ch == 22 and reaper.CF_GetClipboard then -- Ctrl+V (нужен SWS)
-    local clip = (reaper.CF_GetClipboard("") or ""):gsub("%c+", " ")
-    new = target .. clip
-  else
-    local cp = key_to_codepoint(ch)
-    if cp then new = target .. utf8.char(cp) end
-  end
-  if not new then return end
-  if edit then
-    if #new <= NOTE_MAX then edit.buf = new end
-  else
-    set_query(new)
-  end
-end
-
 local function move_cursor_to(idx)
   if #view == 0 then return end
   cursor = view[math.max(1, math.min(idx, #view))]
   follow_cursor = true
-end
-
-local function page_rows()
-  return math.max(1, math.floor((gfx.h - HEAD_H - COLS_H - INFO_H - FOOT_H) / ROW_H))
-end
-
--- Одно нажатие клавиши. Возвращает "close", если окно нужно закрыть.
-local function handle_key(ch)
-  if show_settings then -- в окне «Папки» ввода нет: Esc возвращает к списку
-    if ch == 27 then show_settings = false end
-    return
-  end
-  if edit then
-    if ch == 13 then commit_edit()
-    elseif ch == 27 then edit = nil
-    else type_char(ch) end
-    return
-  end
-  local idx = index_of(cursor) or 1
-  if ch == 27 then
-    if query ~= "" then set_query("") else return "close" end
-  elseif ch == 13 then open_project(cursor)
-  elseif ch == KEY.up then move_cursor_to(idx - 1)
-  elseif ch == KEY.down then move_cursor_to(idx + 1)
-  elseif ch == KEY.pgup then move_cursor_to(idx - page_rows())
-  elseif ch == KEY.pgdn then move_cursor_to(idx + page_rows())
-  elseif ch == KEY.home then move_cursor_to(1)
-  elseif ch == KEY["end"] then move_cursor_to(#view)
-  elseif ch == 9 or ch == KEY.ins then -- Tab / Insert: отметить и перейти ниже
-    if cursor and source == "recent" then
-      cursor.checked = not cursor.checked
-      anchor = cursor
-      move_cursor_to(idx + 1)
-    end
-  elseif ch == KEY.f2 then start_edit()
-  else type_char(ch) end
 end
 
 -- Клик по строке: курсор, галочка, Shift+клик - диапазон от прошлой отметки.
@@ -1157,508 +1091,600 @@ local function row_click(it, shift, now)
 end
 
 ----------------------------------------------------------------------
--- Отрисовка
+-- ReaImGui: подключение
 ----------------------------------------------------------------------
-local function set_color(c, a) gfx.set(c[1], c[2], c[3], a or 1) end
+local NEED_IMGUI = "Окно менеджера проектов работает на расширении ReaImGui, а оно не установлено.\n\n" ..
+  "Как поставить:\n" ..
+  "1. REAPER -> Extensions -> ReaPack -> Browse packages.\n" ..
+  "2. Найти «ReaImGui» (репозиторий ReaTeam Extensions) -> правый клик -> Install.\n" ..
+  "3. Apply, затем перезапустить REAPER и запустить скрипт снова."
+local NEED_IMGUI_NEW = "Установленная ReaImGui слишком старая: нужна версия 0.10 или новее.\n\n" ..
+  "Обновить: REAPER -> Extensions -> ReaPack -> Synchronize packages (или Browse packages -> ReaImGui -> Install), " ..
+  "затем перезапустить REAPER."
 
-local function draw_text(str, x, y, c)
-  set_color(c)
-  gfx.x, gfx.y = x, y
-  gfx.drawstr(str)
+local function connect_imgui()
+  if not reaper.ImGui_GetBuiltinPath then return nil, NEED_IMGUI end
+  package.path = reaper.ImGui_GetBuiltinPath() .. "/?.lua"
+  local ok, lib = pcall(require, "imgui")
+  if not ok or type(lib) ~= "function" then return nil, NEED_IMGUI end
+  local ok2, api = pcall(lib, "0.10")
+  if not ok2 then return nil, NEED_IMGUI_NEW end
+  return api
 end
 
-local function mouse_in(x, y, w, h)
-  local mx, my = gfx.mouse_x, gfx.mouse_y
-  return mx >= x and mx < x + w and my >= y and my < y + h
+local ImGui, imgui_err = connect_imgui()
+if not ImGui then
+  reaper.ShowMessageBox(imgui_err, TITLE, 0)
+  return
 end
+
+----------------------------------------------------------------------
+-- Окно: цвета, шрифты, помощники рисования
+----------------------------------------------------------------------
+local function rgba(c, a)
+  return (math.floor(c[1] * 255 + 0.5) << 24) | (math.floor(c[2] * 255 + 0.5) << 16)
+    | (math.floor(c[3] * 255 + 0.5) << 8) | (a or 255)
+end
+local C = {} -- те же цвета в формате ReaImGui (0xRRGGBBAA)
+for k, v in pairs(col) do C[k] = rgba(v) end
+
+local WINDOW_TITLE = TITLE .. "###SSM_ProjectManager"
+local ctx = ImGui.CreateContext("SSM Project Manager")
+local clipper = ImGui.CreateListClipper(ctx)
+ImGui.Attach(ctx, clipper)
+-- Шрифт тот же, что был в окне до 4.0 (Arial); нет такого - любой без засечек
+local font
+do
+  local ok, f = pcall(ImGui.CreateFont, "Arial")
+  if not ok or not f then ok, f = pcall(ImGui.CreateFont, "sans-serif") end
+  font = ok and f or nil
+  if font then ImGui.Attach(ctx, font) end
+end
+
+local search_gen, note_gen = 0, 0 -- меняются, когда текст полей меняет сам скрипт (Esc, кнопка очистки): поле создаётся заново
+local list_h = 400               -- высота списка в последнем кадре (для PgUp/PgDn)
+local later = {}                 -- действия с модальными окнами и открытием проектов: выполняются вне кадра ReaImGui
+local want_close = false
+local ITEM_GAP = 8
+local SB = 14                    -- ширина полосы прокрутки списка
+local OX = 16                    -- левый край колонок списка
+local RIGHT_PAD = 26             -- справа от колонок остаётся место под полосу прокрутки
+local CB_X, STAR_CX = 0, STAR_X + STAR_W / 2
+
+local function defer_action(fn) later[#later + 1] = fn end
+
+local function text_w(s) return (ImGui.CalcTextSize(ctx, s)) end
 
 -- Обрезка слева ("…хвост пути") - имя файла в конце пути самое важное
 local function clip_tail(str, max_w)
-  if gfx.measurestr(str) <= max_w then return str end
+  if text_w(str) <= max_w then return str end
   local s = str
   while #s > 1 do
     local ok, off = pcall(utf8.offset, s, 2)
     if not ok or not off then off = 2 end
     s = s:sub(off)
-    if gfx.measurestr("…" .. s) <= max_w then return "…" .. s end
+    if text_w("…" .. s) <= max_w then return "…" .. s end
   end
   return "…"
 end
 
 -- Обрезка справа ("начало…")
 local function clip_head(str, max_w)
-  if gfx.measurestr(str) <= max_w then return str end
+  if text_w(str) <= max_w then return str end
   local s = str
   while #s > 1 do
     local ok, off = pcall(utf8.offset, s, -1)
     if not ok or not off then off = #s end
     s = s:sub(1, off - 1)
-    if gfx.measurestr(s .. "…") <= max_w then return s .. "…" end
+    if text_w(s .. "…") <= max_w then return s .. "…" end
   end
   return "…"
 end
 
-local function draw_button(x, y, w, h, label, enabled, click, color, fsize)
-  local hov = enabled and mouse_in(x, y, w, h)
-  local c = (not enabled) and col.btn_off or (hov and col.btn_hover or (color or col.btn))
-  set_color(c); gfx.rect(x, y, w, h, 1)
-  set_color(col.border); gfx.rect(x, y, w, h, 0)
-  local size = fsize or F_BTN
-  gfx.setfont(1, "Arial", size)
-  while size > 12 and gfx.measurestr(label) > w - 12 do
-    size = size - 1
-    gfx.setfont(1, "Arial", size)
+-- Звёздочка и галочка рисуются линиями: в шрифте может не быть символов ★ и ✓
+local function draw_star(dl, cx, cy, R, filled, color)
+  local pts, r = {}, R * 0.42
+  for k = 0, 9 do
+    local a = -math.pi / 2 + k * math.pi / 5
+    local rr = (k % 2 == 0) and R or r
+    pts[#pts + 1] = { cx + rr * math.cos(a), cy + rr * math.sin(a) }
   end
-  local tw = gfx.measurestr(label)
-  draw_text(label, x + (w - tw) / 2, y + (h - size) / 2 - 1, enabled and col.text or col.dim)
-  return hov and click
-end
-
-local function draw_checkbox(x, y, checked)
-  set_color(checked and col.accent or col.bg); gfx.rect(x, y, CB, CB, 1)
-  set_color(col.border); gfx.rect(x, y, CB, CB, 0)
-  if checked then
-    gfx.setfont(1, "Arial", F_ROW)
-    draw_text("✓", x + 3, y, col.text)
-  end
-end
-
-local function draw()
-  local w, h = gfx.w, gfx.h
-  local cap = gfx.mouse_cap
-  local down = (cap & 1) == 1
-  local click = down and (last_cap & 1) == 0
-  local shift = (cap & 8) ~= 0
-  last_cap = cap
-  local lclick = click and not show_settings -- клики по списку и панели проекта не проходят под окно «Папки»
-
-  local list_y = HEAD_H + COLS_H
-  local foot_y = h - FOOT_H
-  local info_y = foot_y - INFO_H
-  local list_h = math.max(60, info_y - list_y)
-  local text_w = w - 32 - BTN_W - 12                 -- ширина текста панели проекта
-  local note_x, note_y = 16 + NOTE_LABEL_W, info_y + 54 -- поле пометки
-  local note_w, note_h = text_w - NOTE_LABEL_W, 26
-
-  set_color(col.bg); gfx.rect(0, 0, w, h, 1)
-
-  -- клик мимо поля пометки завершает её редактирование
-  if edit and click and not mouse_in(note_x, note_y, note_w, note_h) then commit_edit() end
-
-  -- ширина колонок: перетаскивание разделителя, двойной клик - сброс
-  if col_drag then
-    if down then
-      apply_drag(col_drag.kind, col_drag.start, gfx.mouse_x - col_drag.x0)
+  for k = 1, 10 do
+    local a, b = pts[k], pts[k % 10 + 1]
+    if filled then
+      ImGui.DrawList_AddTriangleFilled(dl, cx, cy, a[1], a[2], b[1], b[2], color)
     else
+      ImGui.DrawList_AddLine(dl, a[1], a[2], b[1], b[2], color, 1.5)
+    end
+  end
+end
+
+local function draw_check(dl, x, y, checked)
+  ImGui.DrawList_AddRectFilled(dl, x, y, x + CB, y + CB, checked and C.accent or C.bg)
+  ImGui.DrawList_AddRect(dl, x, y, x + CB, y + CB, C.border)
+  if checked then
+    ImGui.DrawList_AddLine(dl, x + 4, y + 10, x + 8, y + 14, C.text, 2)
+    ImGui.DrawList_AddLine(dl, x + 8, y + 14, x + 16, y + 5, C.text, 2)
+  end
+end
+
+-- Кнопка: color - цвет фона вместо обычного, enabled == false - серая и не нажимается
+local function button(label, id, w, h, enabled, color)
+  if enabled == false then ImGui.BeginDisabled(ctx) end
+  if color then ImGui.PushStyleColor(ctx, ImGui.Col_Button, color) end
+  local clicked = ImGui.Button(ctx, label .. "##" .. id, w, h)
+  if color then ImGui.PopStyleColor(ctx) end
+  if enabled == false then ImGui.EndDisabled(ctx) end
+  return clicked and enabled ~= false
+end
+
+-- Ряд кнопок одной ширины на всю ширину avail_w; возвращает id нажатой
+local function button_row(specs, avail_w, h)
+  local bw = (avail_w - ITEM_GAP * (#specs - 1)) / #specs
+  local clicked
+  for i, s in ipairs(specs) do
+    if i > 1 then ImGui.SameLine(ctx) end
+    if button(s.label, s.id, bw, h, s.enabled, s.color) then clicked = s.id end
+  end
+  return clicked
+end
+
+-- Панель на всю ширину окна (от левого края) с цветом фона и отступами
+local function begin_panel(id, win_w, h, bg, pad_x, pad_y)
+  ImGui.SetCursorPosX(ctx, 0)
+  ImGui.PushStyleColor(ctx, ImGui.Col_ChildBg, bg)
+  ImGui.PushStyleVar(ctx, ImGui.StyleVar_WindowPadding, pad_x or OX, pad_y or 8)
+  local visible = ImGui.BeginChild(ctx, id, win_w, h, ImGui.ChildFlags_AlwaysUseWindowPadding,
+    ImGui.WindowFlags_NoScrollbar | ImGui.WindowFlags_NoScrollWithMouse)
+  ImGui.PopStyleVar(ctx)
+  ImGui.PopStyleColor(ctx)
+  return visible
+end
+
+local function small_text(str, color)
+  ImGui.PushFont(ctx, font, F_SMALL)
+  ImGui.TextColored(ctx, color or C.dim, str)
+  ImGui.PopFont(ctx)
+end
+
+----------------------------------------------------------------------
+-- Окно: ввод с клавиатуры
+----------------------------------------------------------------------
+local function pressed(key, repeat_) return ImGui.IsKeyPressed(ctx, key, repeat_ == true) end
+
+local function clear_query()
+  set_query("")
+  search_gen = search_gen + 1
+end
+
+local function page_rows() return math.max(1, math.floor(list_h / ROW_H)) end
+
+local function handle_keys()
+  local enter = pressed(ImGui.Key_Enter) or pressed(ImGui.Key_KeypadEnter)
+  if show_settings then -- в окне «Папки» ввода нет: Esc возвращает к списку
+    if pressed(ImGui.Key_Escape) then show_settings = false end
+    return
+  end
+  if edit then
+    if enter then commit_edit(); note_gen = note_gen + 1
+    elseif pressed(ImGui.Key_Escape) then edit = nil; note_gen = note_gen + 1 end
+    return
+  end
+  local idx = index_of(cursor) or 1
+  if pressed(ImGui.Key_Escape) then
+    if query ~= "" then clear_query() else want_close = true end
+  elseif enter then
+    local it = cursor
+    defer_action(function() open_project(it) end)
+  elseif pressed(ImGui.Key_UpArrow, true) then move_cursor_to(idx - 1)
+  elseif pressed(ImGui.Key_DownArrow, true) then move_cursor_to(idx + 1)
+  elseif pressed(ImGui.Key_PageUp, true) then move_cursor_to(idx - page_rows())
+  elseif pressed(ImGui.Key_PageDown, true) then move_cursor_to(idx + page_rows())
+  elseif pressed(ImGui.Key_Home) then move_cursor_to(1)
+  elseif pressed(ImGui.Key_End) then move_cursor_to(#view)
+  elseif pressed(ImGui.Key_Tab) or pressed(ImGui.Key_Insert) then -- отметить и перейти ниже
+    if cursor and source == "recent" then
+      cursor.checked = not cursor.checked
+      anchor = cursor
+      move_cursor_to(idx + 1)
+    end
+  elseif pressed(ImGui.Key_F2) then start_edit()
+  end
+end
+
+----------------------------------------------------------------------
+-- Окно: заголовок, поиск, кнопки сортировки и фильтров
+----------------------------------------------------------------------
+local function draw_top(win_w)
+  local inner_w = win_w - OX * 2
+  ImGui.PushFont(ctx, font, F_TITLE)
+  if not filters_active() then
+    ImGui.Text(ctx, string.format("%s: %d  (не найдено: %d)", source == "recent" and "Недавние проекты" or "Все проекты",
+      #items, count_missing()))
+  else
+    ImGui.Text(ctx, string.format("Найдено: %d из %d  (не найдено: %d)", #view, #items, count_missing()))
+  end
+  ImGui.PopFont(ctx)
+  if not has_js_stat then
+    local note = "Дата изменения: нужен js_ReaScriptAPI"
+    ImGui.PushFont(ctx, font, 14)
+    ImGui.SameLine(ctx, win_w - OX - text_w(note), 0)
+    ImGui.TextColored(ctx, C.dim, note)
+    ImGui.PopFont(ctx)
+  end
+  if source == "recent" then
+    small_text("Галочка - выбрать · звезда - избранное · двойной клик или Enter - открыть · F2 - пометка · Esc - очистить поиск")
+  else
+    small_text("Звезда - избранное · двойной клик или Enter - открыть · F2 - пометка · Esc - очистить поиск · «Папки» - где искать проекты")
+  end
+
+  -- строка поиска: ввод идёт сюда всегда, пока не редактируется пометка и не нажата кнопка
+  local clear_w = 34
+  if not edit and not ImGui.IsAnyItemActive(ctx) then ImGui.SetKeyboardFocusHere(ctx) end
+  ImGui.SetNextItemWidth(ctx, query ~= "" and (inner_w - clear_w - ITEM_GAP) or inner_w)
+  local changed, text = ImGui.InputTextWithHint(ctx, "##search" .. search_gen,
+    "Поиск по имени, пути и пометкам: начните печатать…", query)
+  if changed and text ~= query then set_query(text) end
+  if query ~= "" then
+    ImGui.SameLine(ctx)
+    if ImGui.Button(ctx, "×##clear", clear_w, 0) then clear_query() end
+  end
+
+  -- ряд кнопок сортировки
+  local specs = {}
+  for _, sk in ipairs(SORT_KEYS) do
+    local active = (sk.key == sort_key)
+    local label = sk.label
+    if sk.key == "order" and source == "library" then label = "Как найдено" end
+    if active and (sk.key ~= "order" or sort_desc) then label = label .. (sort_desc and " ▼" or " ▲") end
+    specs[#specs + 1] = { label = label, id = "sort_" .. sk.key, enabled = not (sk.key == "date" and not has_dates),
+      color = active and C.accent or nil, key = sk.key }
+  end
+  local clicked = button_row(specs, inner_w, 34)
+  for _, s in ipairs(specs) do if clicked == s.id then set_sort(s.key) end end
+
+  -- второй ряд: источник списка, фильтры, массовая отметка (Недавние) или «Папки» (Все проекты)
+  local left = {
+    { id = "recent", w = 112, label = "Недавние", color = source == "recent" and C.accent or nil },
+    { id = "library", w = 112, label = "Все проекты", color = source == "library" and C.accent or nil },
+    { id = "missing", w = 190, label = "Только не найденные", color = f_missing and C.accent or nil },
+    { id = "age", w = 210, enabled = has_dates, color = f_age > 1 and C.accent or nil,
+      label = has_dates and ("Возраст: " .. AGE_STEPS[f_age][2]) or "Возраст: нужен js_ReaScriptAPI" },
+  }
+  local right
+  if source == "recent" then
+    right = { { id = "all", w = 120, label = "Отметить все", enabled = #view > 0 },
+              { id = "none", w = 110, label = "Снять все" } }
+  else
+    right = { { id = "folders", w = 100, label = "Папки", color = show_settings and C.accent or nil } }
+  end
+  local sum = 0
+  for _, b in ipairs(left) do sum = sum + b.w end
+  for _, b in ipairs(right) do sum = sum + b.w end
+  local gaps = (#left - 1 + #right - 1 + 1) * ITEM_GAP -- плюс зазор между левой и правой группами
+  local k = math.max(0.5, math.min(1, (inner_w - gaps) / sum)) -- в узком окне кнопки ужимаются
+  local x0 = ImGui.GetCursorPosX(ctx)
+  local right_w = 0
+  for _, b in ipairs(right) do right_w = right_w + b.w * k end
+  right_w = right_w + ITEM_GAP * (#right - 1)
+  local chip
+  for i, b in ipairs(left) do
+    if i > 1 then ImGui.SameLine(ctx) end
+    if button(b.label, "chip_" .. b.id, b.w * k, 30, b.enabled, b.color) then chip = b.id end
+  end
+  for i, b in ipairs(right) do
+    if i == 1 then ImGui.SameLine(ctx, x0 + inner_w - right_w, 0) else ImGui.SameLine(ctx) end
+    if button(b.label, "chip_" .. b.id, b.w * k, 30, b.enabled, b.color) then chip = b.id end
+  end
+  if chip == "recent" or chip == "library" then set_source(chip)
+  elseif chip == "missing" then f_missing = not f_missing; after_filter_change()
+  elseif chip == "age" then f_age = f_age % #AGE_STEPS + 1; after_filter_change()
+  elseif chip == "all" then
+    for _, it in ipairs(view) do if not it.fav then it.checked = true end end -- избранные защищены
+  elseif chip == "none" then
+    for _, it in ipairs(items) do it.checked = false end
+  elseif chip == "folders" then
+    show_settings = not show_settings
+    edit = nil
+  end
+end
+
+----------------------------------------------------------------------
+-- Окно: заголовки колонок с разделителями и список проектов
+----------------------------------------------------------------------
+local function draw_columns_header(win_w, L)
+  ImGui.SetCursorPosX(ctx, 0)
+  ImGui.PushStyleColor(ctx, ImGui.Col_ChildBg, C.row_alt)
+  local visible = ImGui.BeginChild(ctx, "##cols", win_w, COLS_H, ImGui.ChildFlags_None,
+    ImGui.WindowFlags_NoScrollbar | ImGui.WindowFlags_NoScrollWithMouse)
+  ImGui.PopStyleColor(ctx)
+  if not visible then return end
+  local sx, sy = ImGui.GetCursorScreenPos(ctx)
+  local dl = ImGui.GetWindowDrawList(ctx)
+  ImGui.PushFont(ctx, font, F_SMALL)
+  local ty = sy + (COLS_H - F_SMALL) / 2 - 1
+  local x0 = sx + OX
+  ImGui.DrawList_AddText(dl, x0 + L.name_x + 4, ty, C.dim, "Имя")
+  ImGui.DrawList_AddText(dl, x0 + L.path_x + 4, ty, C.dim, "Путь")
+  if has_dates then ImGui.DrawList_AddText(dl, x0 + L.date_x + 4, ty, C.dim, "Дата") end
+  ImGui.DrawList_AddText(dl, x0 + L.right - 2 - text_w("Размер"), ty, C.dim, "Размер")
+  ImGui.PopFont(ctx)
+  ImGui.DrawList_AddLine(dl, sx, sy + COLS_H - 1, sx + win_w, sy + COLS_H - 1, C.border)
+
+  -- разделители: тянутся мышью (запоминаются), двойной клик - стандартная ширина
+  for _, dv in ipairs(dividers(L)) do
+    ImGui.SetCursorScreenPos(ctx, x0 + dv.x - 4, sy)
+    ImGui.InvisibleButton(ctx, "##div_" .. dv.kind, 9, COLS_H)
+    local hot = ImGui.IsItemHovered(ctx) or (col_drag and col_drag.kind == dv.kind)
+    if hot then ImGui.SetMouseCursor(ctx, ImGui.MouseCursor_ResizeEW) end
+    if ImGui.IsItemHovered(ctx) and ImGui.IsMouseDoubleClicked(ctx, ImGui.MouseButton_Left) then
+      reset_cols(); col_drag = nil
+    elseif ImGui.IsItemActivated(ctx) then
+      col_w.name, col_w.date, col_w.size = L.name_w, has_dates and L.date_w or col_w.date, L.size_w
+      col_drag = { kind = dv.kind,
+        start = { name = col_w.name, date = col_w.date, size = col_w.size, path = L.path_w } }
+    elseif col_drag and col_drag.kind == dv.kind and ImGui.IsItemActive(ctx) then
+      local dx = ImGui.GetMouseDragDelta(ctx, nil, nil, ImGui.MouseButton_Left, 0.0)
+      apply_drag(col_drag.kind, col_drag.start, dx)
+    elseif col_drag and col_drag.kind == dv.kind and ImGui.IsItemDeactivated(ctx) then
       col_drag = nil
       save_cols()
     end
+    local x = x0 + dv.x
+    ImGui.DrawList_AddLine(dl, x, sy + 4, x, sy + COLS_H - 4, hot and C.accent or C.border, hot and 3 or 1)
   end
-  local L = layout(w)
-  local divs = dividers(L)
-  if lclick and not col_drag and gfx.mouse_y >= HEAD_H and gfx.mouse_y < list_y then
-    for _, dv in ipairs(divs) do
-      if math.abs(gfx.mouse_x - dv.x) <= 4 then
-        local now = reaper.time_precise()
-        if now - last_div_click_t < DOUBLE_CLICK then
-          reset_cols()
-          last_div_click_t = -1e9
-        else
-          last_div_click_t = now
-          col_w.name, col_w.date, col_w.size = L.name_w, has_dates and L.date_w or col_w.date, L.size_w
-          col_drag = { kind = dv.kind, x0 = gfx.mouse_x,
-            start = { name = col_w.name, date = col_w.date, size = col_w.size, path = L.path_w } }
-        end
-        break
-      end
-    end
-  end
+  ImGui.EndChild(ctx)
+end
 
-  local total_h = #view * ROW_H
-  local max_scroll = math.max(0, total_h - list_h)
+local function draw_row(i, it, L, row_w)
+  local sx, sy = ImGui.GetCursorScreenPos(ctx)
+  local dl = ImGui.GetWindowDrawList(ctx)
+  local x0 = sx + OX
+  if i % 2 == 0 then ImGui.DrawList_AddRectFilled(dl, sx, sy, sx + row_w, sy + ROW_H, C.row_alt) end
+  ImGui.SetNextItemAllowOverlap(ctx)
+  local clicked = ImGui.Selectable(ctx, "##row" .. i, false, ImGui.SelectableFlags_AllowOverlap, 0, ROW_H)
+  -- звёздочка: своя область поверх строки
+  ImGui.SetCursorScreenPos(ctx, x0 + STAR_X - 2, sy)
+  local star_clicked = ImGui.InvisibleButton(ctx, "##star" .. i, STAR_W + 4, ROW_H)
 
-  if gfx.mouse_wheel ~= 0 then
-    scroll = scroll - (gfx.mouse_wheel / 120) * ROW_H * 3
-    gfx.mouse_wheel = 0
+  if it == cursor then ImGui.DrawList_AddRect(dl, sx + 1, sy, sx + row_w - 1, sy + ROW_H, C.accent) end
+  if source == "recent" then draw_check(dl, x0 + CB_X, sy + (ROW_H - CB) / 2, it.checked) end
+  draw_star(dl, x0 + STAR_CX, sy + ROW_H / 2, 8, it.fav, it.fav and C.star or C.dim)
+
+  local text_y = sy + (ROW_H - F_ROW) / 2 - 1
+  ImGui.DrawList_AddText(dl, x0 + L.name_x + 4, text_y, it.exists and C.text or C.dim,
+    clip_head(it.title, L.name_w - 12))
+  ImGui.PushFont(ctx, font, F_SMALL)
+  local small_y = sy + (ROW_H - F_SMALL) / 2
+  local note_tag_w = 0
+  if it.note ~= "" then -- пометка - у правого края колонки пути
+    local shown = clip_head(it.note, math.min(220, L.path_w * 0.4))
+    note_tag_w = text_w(shown) + 14
+    ImGui.DrawList_AddText(dl, x0 + L.date_x - note_tag_w + 4, small_y, C.tag, shown)
   end
-  if follow_cursor then -- курсор, сдвинутый с клавиатуры, не должен уходить за край списка
+  if it.exists then
+    if has_dates then ImGui.DrawList_AddText(dl, x0 + L.date_x + 4, small_y, C.dim, fmt_date(it.mtime)) end
+    local sz = fmt_size(it.size)
+    ImGui.DrawList_AddText(dl, x0 + L.right - 2 - text_w(sz), small_y, C.dim, sz)
+  else
+    local tag = "не найден"
+    ImGui.DrawList_AddText(dl, x0 + L.right - 2 - text_w(tag), small_y, C.danger, tag)
+  end
+  ImGui.PopFont(ctx)
+  ImGui.DrawList_AddText(dl, x0 + L.path_x + 4, text_y, C.dim, clip_tail(it.path, L.path_w - 12 - note_tag_w))
+  return clicked, star_clicked
+end
+
+local function draw_list(win_w, L, h)
+  ImGui.SetCursorPosX(ctx, 0)
+  ImGui.PushStyleColor(ctx, ImGui.Col_ChildBg, C.bg)
+  local visible = ImGui.BeginChild(ctx, "##list", win_w, h, ImGui.ChildFlags_None, ImGui.WindowFlags_None)
+  ImGui.PopStyleColor(ctx)
+  if not visible then return end
+  ImGui.PushStyleVar(ctx, ImGui.StyleVar_ItemSpacing, 0, 0) -- строки стоят вплотную: шаг ровно ROW_H
+
+  -- прокрутка: после смены списка - наверх, курсор с клавиатуры не должен уходить за край
+  if scroll_reset then
+    scroll_reset = false
+    follow_cursor = false
+    ImGui.SetScrollY(ctx, 0)
+  elseif follow_cursor then
     follow_cursor = false
     local idx = index_of(cursor)
     if idx then
+      local scroll = ImGui.GetScrollY(ctx)
       local top = (idx - 1) * ROW_H
-      if top < scroll then scroll = top
-      elseif top + ROW_H > scroll + list_h then scroll = top + ROW_H - list_h end
+      if top < scroll then ImGui.SetScrollY(ctx, top)
+      elseif top + ROW_H > scroll + h then ImGui.SetScrollY(ctx, top + ROW_H - h) end
     end
   end
-  scroll = math.max(0, math.min(scroll, max_scroll))
 
-  -- Полоса прокрутки: ползунок тащится мышью, клик по дорожке переносит ползунок
-  -- в это место (и его можно сразу тащить дальше). Зона захвата - правые 14 пикселей списка.
-  local thumb_h, thumb_y = 0, list_y
-  if max_scroll > 0 then
-    thumb_h = math.max(24, list_h * list_h / total_h)
-    local travel = list_h - thumb_h
-    thumb_y = list_y + travel * (scroll / max_scroll)
-    if sb_drag then
-      if down then
-        thumb_y = math.max(list_y, math.min(gfx.mouse_y - sb_drag, list_y + travel))
-        scroll = (thumb_y - list_y) / travel * max_scroll
-      else
-        sb_drag = nil
-      end
-    elseif lclick and gfx.mouse_x >= w - 14 and gfx.mouse_y >= list_y and gfx.mouse_y < list_y + list_h then
-      if gfx.mouse_y < thumb_y or gfx.mouse_y > thumb_y + thumb_h then
-        thumb_y = math.max(list_y, math.min(gfx.mouse_y - thumb_h / 2, list_y + travel))
-        scroll = (thumb_y - list_y) / travel * max_scroll
-      end
-      sb_drag = gfx.mouse_y - thumb_y
-    end
-  else
-    sb_drag = nil
-  end
-
-  -- строки списка (шапка и панели перекрывают выступающие части)
-  gfx.setfont(1, "Arial", F_ROW)
+  local shift = (ImGui.GetKeyMods(ctx) & ImGui.Mod_Shift) ~= 0
   local open_now, fav_now
-  for i, it in ipairs(view) do
-    local ry = list_y + (i - 1) * ROW_H - scroll
-    if ry + ROW_H > list_y and ry < list_y + list_h then
-      if i % 2 == 0 then set_color(col.row_alt); gfx.rect(0, ry, w, ROW_H, 1) end
-
-      local in_list = gfx.mouse_y >= list_y and gfx.mouse_y < list_y + list_h
-      if in_list and mouse_in(0, ry, w - 14, ROW_H) then
-        set_color(col.panel); gfx.rect(0, ry, w, ROW_H, 1)
-        if lclick then
-          if mouse_in(STAR_X - 2, ry, STAR_W + 4, ROW_H) then
-            fav_now = it
-          elseif row_click(it, shift, reaper.time_precise()) then
-            open_now = it
-          end
-        end
-      end
-      if it == cursor then
-        set_color(col.accent); gfx.rect(1, ry, w - 16, ROW_H, 0)
-      end
-
-      if source == "recent" then draw_checkbox(16, ry + (ROW_H - CB) / 2, it.checked) end
-      gfx.setfont(1, "Arial", F_ROW)
-      draw_text(it.fav and "★" or "☆", STAR_X, ry + (ROW_H - F_ROW) / 2 - 1, it.fav and col.star or col.dim)
-
-      local small_y = ry + (ROW_H - F_SMALL) / 2
-      local text_y = ry + (ROW_H - F_ROW) / 2 - 1
-      gfx.setfont(1, "Arial", F_ROW)
-      draw_text(clip_head(it.title, L.name_w - 12), L.name_x + 4, text_y, it.exists and col.text or col.dim)
-
-      -- пометка - у правого края колонки пути
-      local note_tag_w = 0
-      if it.note ~= "" then
-        gfx.setfont(1, "Arial", F_SMALL)
-        local shown = clip_head(it.note, math.min(220, L.path_w * 0.4))
-        note_tag_w = gfx.measurestr(shown) + 14
-        draw_text(shown, L.date_x - note_tag_w + 4, small_y, col.tag)
-        gfx.setfont(1, "Arial", F_ROW)
-      end
-      draw_text(clip_tail(it.path, L.path_w - 12 - note_tag_w), L.path_x + 4, text_y, col.dim)
-
-      gfx.setfont(1, "Arial", F_SMALL)
-      if it.exists then
-        if has_dates then draw_text(fmt_date(it.mtime), L.date_x + 4, small_y, col.dim) end
-        local sz = fmt_size(it.size)
-        draw_text(sz, L.right - 2 - gfx.measurestr(sz), small_y, col.dim)
-      else
-        local tag = "не найден"
-        draw_text(tag, L.right - 2 - gfx.measurestr(tag), small_y, col.danger)
-      end
+  ImGui.PushFont(ctx, font, F_ROW)
+  ImGui.ListClipper_Begin(clipper, #view, ROW_H) -- рисуются только видимые строки: список может быть в тысячи проектов
+  while ImGui.ListClipper_Step(clipper) do
+    local first, last = ImGui.ListClipper_GetDisplayRange(clipper)
+    for i = first + 1, last do
+      local it = view[i]
+      local clicked, star_clicked = draw_row(i, it, L, win_w)
+      if star_clicked then fav_now = it
+      elseif clicked and row_click(it, shift, reaper.time_precise()) then open_now = it end
     end
   end
-
   if #items == 0 then
     local msg
     if source == "recent" then msg = "Список Recent projects пуст."
     elseif #lib.dirs == 0 then msg = "Папки не заданы. Нажмите «Папки» и добавьте папку с проектами."
     elseif lib.scan then msg = "Идёт сканирование…"
     else msg = "Список пуст. Нажмите «Пересканировать»." end
-    draw_text(msg, 16, list_y + 18, col.dim)
+    ImGui.SetCursorPos(ctx, OX, 18)
+    ImGui.TextColored(ctx, C.dim, msg)
   elseif #view == 0 then
-    draw_text("Ничего не найдено. Измените поиск или фильтры.", 16, list_y + 18, col.dim)
+    ImGui.SetCursorPos(ctx, OX, 18)
+    ImGui.TextColored(ctx, C.dim, "Ничего не найдено. Измените поиск или фильтры.")
   end
+  ImGui.PopFont(ctx)
+  ImGui.PopStyleVar(ctx)
+  ImGui.EndChild(ctx)
+  if fav_now then toggle_fav(fav_now)
+  elseif open_now then local it = open_now; defer_action(function() open_project(it) end) end
+end
 
-  -- полоса прокрутки
-  if max_scroll > 0 then
-    local hot = sb_drag ~= nil or mouse_in(w - 14, thumb_y, 14, thumb_h)
-    set_color(sb_drag and col.accent or (hot and col.dim or col.border))
-    gfx.rect(w - 11, thumb_y, 8, thumb_h, 1)
-  end
-
-  -- заголовки колонок с разделителями
-  set_color(col.row_alt); gfx.rect(0, HEAD_H, w, COLS_H, 1)
-  set_color(col.border); gfx.rect(0, list_y - 1, w, 1, 1)
-  gfx.setfont(1, "Arial", F_SMALL)
-  local hy = HEAD_H + (COLS_H - F_SMALL) / 2 - 1
-  draw_text("Имя", L.name_x + 4, hy, col.dim)
-  draw_text("Путь", L.path_x + 4, hy, col.dim)
-  if has_dates then draw_text("Дата", L.date_x + 4, hy, col.dim) end
-  draw_text("Размер", L.right - 2 - gfx.measurestr("Размер"), hy, col.dim)
-  for _, dv in ipairs(divs) do
-    local hot = (col_drag and col_drag.kind == dv.kind) or (not col_drag and mouse_in(dv.x - 4, HEAD_H, 9, COLS_H))
-    set_color(hot and col.accent or col.border)
-    gfx.rect(dv.x - (hot and 1 or 0), HEAD_H + 4, hot and 3 or 1, COLS_H - 8, 1)
-  end
-
-  -- шапка
-  set_color(col.panel); gfx.rect(0, 0, w, HEAD_H, 1)
-  set_color(col.border); gfx.rect(0, HEAD_H - 1, w, 1, 1)
-  gfx.setfont(1, "Arial", F_TITLE)
-  if not filters_active() then
-    draw_text(string.format("%s: %d  (не найдено: %d)", source == "recent" and "Недавние проекты" or "Все проекты",
-      #items, count_missing()), 16, 9, col.text)
+----------------------------------------------------------------------
+-- Окно: панель проекта под курсором
+----------------------------------------------------------------------
+local function draw_info(win_w)
+  if not begin_panel("##info", win_w, INFO_H, C.panel, OX, 6) then return end
+  local sx, sy = ImGui.GetCursorScreenPos(ctx)
+  local dl = ImGui.GetWindowDrawList(ctx)
+  ImGui.DrawList_AddLine(dl, sx - OX, sy - 6, sx - OX + win_w, sy - 6, C.border)
+  local it = cursor
+  local text_max = win_w - OX * 2 - BTN_W - 12 -- ширина текста панели проекта
+  if not it then
+    ImGui.SetCursorPosY(ctx, 12)
+    small_text("Проект не выбран.")
   else
-    draw_text(string.format("Найдено: %d из %d  (не найдено: %d)", #view, #items, count_missing()), 16, 9, col.text)
-  end
-  gfx.setfont(1, "Arial", F_SMALL)
-  if source == "recent" then
-    draw_text("Галочка - выбрать · ★ - избранное · двойной клик или Enter - открыть · F2 - пометка · Esc - очистить поиск",
-      16, 40, col.dim)
-  else
-    draw_text("★ - избранное · двойной клик или Enter - открыть · F2 - пометка · Esc - очистить поиск · «Папки» - где искать проекты",
-      16, 40, col.dim)
-  end
-  if not has_js_stat then
-    gfx.setfont(1, "Arial", 14)
-    local note = "Дата изменения: нужен js_ReaScriptAPI"
-    draw_text(note, w - 16 - gfx.measurestr(note), 12, col.dim)
-  end
-
-  -- строка поиска: ввод идёт сюда всегда (см. loop), справа кнопка очистки
-  do
-    local sx, sw = 16, w - 32
-    set_color(col.bg); gfx.rect(sx, SEARCH_Y, sw, SEARCH_H, 1)
-    set_color(query ~= "" and col.accent or col.border); gfx.rect(sx, SEARCH_Y, sw, SEARCH_H, 0)
-    gfx.setfont(1, "Arial", F_ROW)
-    local ty = SEARCH_Y + (SEARCH_H - F_ROW) / 2 - 1
-    local clear_w = SEARCH_H
-    local shown = ""
-    if query == "" then
-      draw_text("Поиск по имени, пути и пометкам: начните печатать…", sx + 10, ty, col.dim)
+    local name = it.path:match("([^\\/]+)$") or it.path
+    ImGui.SetCursorPosY(ctx, 8)
+    ImGui.PushFont(ctx, font, F_ROW)
+    ImGui.TextColored(ctx, it.exists and C.text or C.danger, clip_head(name, text_max))
+    ImGui.PopFont(ctx)
+    local line
+    if not it.exists then
+      line = "Файл не найден."
     else
-      shown = clip_tail(query, sw - clear_w - 20)
-      draw_text(shown, sx + 10, ty, col.text)
-      local cx = sx + sw - clear_w
-      local hov = mouse_in(cx, SEARCH_Y, clear_w, SEARCH_H)
-      set_color(hov and col.btn_hover or col.btn); gfx.rect(cx + 1, SEARCH_Y + 1, clear_w - 2, SEARCH_H - 2, 1)
-      draw_text("✕", cx + (clear_w - gfx.measurestr("✕")) / 2, ty, col.text)
-      if hov and click then set_query("") end
+      local inf = get_info(it)
+      if not inf then line = "Читаю проект…"
+      elseif inf.err then line = inf.err
+      else line = info_text(inf) end
     end
-    if not edit and math.floor(reaper.time_precise() * 2) % 2 == 0 then -- мигающий курсор
-      set_color(col.text)
-      gfx.rect(sx + 10 + gfx.measurestr(shown) + 1, SEARCH_Y + 7, 1, SEARCH_H - 14, 1)
+    ImGui.SetCursorPosY(ctx, 33)
+    ImGui.PushFont(ctx, font, F_SMALL)
+    ImGui.TextColored(ctx, C.dim, clip_head(line, text_max))
+    ImGui.SetCursorPosY(ctx, 54)
+    ImGui.PushStyleVar(ctx, ImGui.StyleVar_FramePadding, 8, 4)
+    ImGui.AlignTextToFramePadding(ctx)
+    ImGui.TextColored(ctx, C.dim, "Пометка:")
+    ImGui.SameLine(ctx, OX + NOTE_LABEL_W, 0)
+    -- пометка: поле ввода; клик или F2 - редактировать, Enter - сохранить, Esc - отменить, клик мимо - сохранить
+    local editing = edit and edit.it == it
+    if edit and edit.focus then edit.focus = false; ImGui.SetKeyboardFocusHere(ctx) end
+    ImGui.SetNextItemWidth(ctx, text_max - NOTE_LABEL_W)
+    if not editing and it.note ~= "" then ImGui.PushStyleColor(ctx, ImGui.Col_Text, C.tag) end
+    local changed, text = ImGui.InputTextWithHint(ctx, "##note" .. note_gen,
+      "нет - клик или F2, чтобы добавить (Enter - сохранить)", editing and edit.buf or it.note)
+    if not editing and it.note ~= "" then ImGui.PopStyleColor(ctx) end
+    ImGui.PopStyleVar(ctx)
+    if ImGui.IsItemActivated(ctx) and not edit then -- клик по полю: редактирование началось, фокус уже в нём
+      start_edit()
+      if edit then edit.focus = false end
     end
+    if changed and editing then edit.buf = text end
+    if edit and ImGui.IsItemDeactivated(ctx) then commit_edit(); note_gen = note_gen + 1 end
+    ImGui.PopFont(ctx)
+
+    -- кнопки справа
+    local bx = win_w - OX - BTN_W
+    ImGui.PushFont(ctx, font, F_SMALL)
+    ImGui.PushStyleVar(ctx, ImGui.StyleVar_FramePadding, 10, 3)
+    ImGui.SetCursorPos(ctx, bx, 6)
+    local act_fav = button(it.fav and "Убрать из избранного" or "В избранное", "fav", BTN_W, 24)
+    ImGui.SetCursorPos(ctx, bx, 33)
+    local act_note = button("Пометка (F2)", "note", BTN_W, 24)
+    ImGui.SetCursorPos(ctx, bx, 60)
+    local act_reveal = button("Показать в папке", "reveal", BTN_W, 24, it.exists)
+    ImGui.PopStyleVar(ctx)
+    ImGui.PopFont(ctx)
+    if act_fav then toggle_fav(it)
+    elseif act_note then start_edit()
+    elseif act_reveal then defer_action(function() reveal_in_folder(it) end) end
   end
+  ImGui.EndChild(ctx)
+end
 
-  -- ряд кнопок сортировки
-  do
-    local n, gap = #SORT_KEYS, 6
-    local bw2 = (w - 32 - gap * (n - 1)) / n
-    local clicked_key
-    for i, sk in ipairs(SORT_KEYS) do
-      local active = (sk.key == sort_key)
-      local enabled = not (sk.key == "date" and not has_dates)
-      local label = sk.label
-      if sk.key == "order" and source == "library" then label = "Как найдено" end
-      if active and (sk.key ~= "order" or sort_desc) then label = label .. (sort_desc and " ▼" or " ▲") end
-      local x = 16 + (i - 1) * (bw2 + gap)
-      local hov = enabled and mouse_in(x, SORT_Y, bw2, SORT_H)
-      local c = (not enabled) and col.btn_off or (active and col.accent or (hov and col.btn_hover or col.btn))
-      set_color(c); gfx.rect(x, SORT_Y, bw2, SORT_H, 1)
-      set_color(col.border); gfx.rect(x, SORT_Y, bw2, SORT_H, 0)
-      local size = F_SORT
-      gfx.setfont(1, "Arial", size)
-      while size > 11 and gfx.measurestr(label) > bw2 - 8 do
-        size = size - 1
-        gfx.setfont(1, "Arial", size)
-      end
-      draw_text(label, x + (bw2 - gfx.measurestr(label)) / 2, SORT_Y + (SORT_H - size) / 2 - 1,
-        enabled and col.text or col.dim)
-      if hov and click then clicked_key = sk.key end
-    end
-    if clicked_key then set_sort(clicked_key) end
+----------------------------------------------------------------------
+-- Окно: «Папки» (закрывает список и панель проекта)
+----------------------------------------------------------------------
+local function draw_settings(win_w, h)
+  if not begin_panel("##settings", win_w, h, C.bg, OX, 10) then return end
+  ImGui.PushStyleVar(ctx, ImGui.StyleVar_ItemSpacing, ITEM_GAP, 6)
+  ImGui.PushFont(ctx, font, F_TITLE)
+  ImGui.Text(ctx, "Папки для поиска проектов")
+  ImGui.PopFont(ctx)
+  small_text("Проекты (.rpp) ищутся в этих папках и во всех вложенных. Файлы проектов не изменяются.")
+  if #lib.dirs == 0 then
+    ImGui.TextColored(ctx, C.dim, "Папок нет. Нажмите «Добавить папку…».")
   end
-
-  -- второй ряд: источник списка, фильтры, массовая отметка (Недавние) или «Папки» (Все проекты)
-  do
-    local specs = {
-      { id = "recent", w = 112, label = "Недавние", color = source == "recent" and col.accent or nil },
-      { id = "library", w = 112, label = "Все проекты", color = source == "library" and col.accent or nil },
-      { id = "missing", w = 190, label = "Только не найденные", color = f_missing and col.accent or nil },
-      { id = "age", w = 210, enabled = has_dates, color = f_age > 1 and col.accent or nil,
-        label = has_dates and ("Возраст: " .. AGE_STEPS[f_age][2]) or "Возраст: нужен js_ReaScriptAPI" },
-    }
-    local right
-    if source == "recent" then
-      right = { { id = "all", w = 120, label = "Отметить все", enabled = #view > 0 },
-                { id = "none", w = 110, label = "Снять все" } }
-    else
-      right = { { id = "folders", w = 100, label = "Папки", color = show_settings and col.accent or nil } }
-    end
-    local gap, sum = 8, 0
-    for _, b in ipairs(specs) do sum = sum + b.w end
-    for _, b in ipairs(right) do sum = sum + b.w end
-    local gaps = (#specs - 1 + #right - 1 + 1) * gap -- плюс зазор между левой и правой группами
-    local k = math.max(0.5, math.min(1, (w - 32 - gaps) / sum)) -- в узком окне кнопки ужимаются
-    local clicked
-    local x = 16
-    for _, b in ipairs(specs) do
-      local bw = b.w * k
-      if draw_button(x, CHIP_Y, bw, CHIP_H, b.label, b.enabled ~= false, click, b.color, F_SMALL) then clicked = b.id end
-      x = x + bw + gap
-    end
-    x = w - 16
-    for i = #right, 1, -1 do
-      local b = right[i]
-      local bw = b.w * k
-      x = x - bw
-      if draw_button(x, CHIP_Y, bw, CHIP_H, b.label, b.enabled ~= false, click, b.color, F_SMALL) then clicked = b.id end
-      x = x - gap
-    end
-    if clicked == "recent" or clicked == "library" then set_source(clicked)
-    elseif clicked == "missing" then f_missing = not f_missing; after_filter_change()
-    elseif clicked == "age" then f_age = f_age % #AGE_STEPS + 1; after_filter_change()
-    elseif clicked == "all" then
-      for _, it in ipairs(view) do if not it.fav then it.checked = true end end -- избранные защищены
-    elseif clicked == "none" then
-      for _, it in ipairs(items) do it.checked = false end
-    elseif clicked == "folders" then
-      show_settings = not show_settings
-      edit = nil
-    end
+  local rm_dir
+  for i, d in ipairs(lib.dirs) do
+    ImGui.AlignTextToFramePadding(ctx)
+    ImGui.Text(ctx, clip_tail(d, win_w - OX * 2 - 110))
+    ImGui.SameLine(ctx, win_w - OX - 90, 0)
+    if button("Убрать", "rmdir" .. i, 90, 26) then rm_dir = i end
   end
-
-  -- панель проекта под курсором
-  local act_fav, act_note, act_reveal
-  do
-    set_color(col.panel); gfx.rect(0, info_y, w, INFO_H, 1)
-    set_color(col.border); gfx.rect(0, info_y, w, 1, 1)
-    local it = cursor
-    if not it then
-      gfx.setfont(1, "Arial", F_SMALL)
-      draw_text("Проект не выбран.", 16, info_y + 12, col.dim)
-    else
-      gfx.setfont(1, "Arial", F_ROW)
-      local name = it.path:match("([^\\/]+)$") or it.path
-      draw_text(clip_head(name, text_w), 16, info_y + 8, it.exists and col.text or col.danger)
-
-      gfx.setfont(1, "Arial", F_SMALL)
-      local line
-      if not it.exists then
-        line = "Файл не найден."
-      else
-        local inf = get_info(it)
-        if not inf then line = "Читаю проект…"
-        elseif inf.err then line = inf.err
-        else line = info_text(inf) end
-      end
-      draw_text(clip_head(line, text_w), 16, info_y + 33, col.dim)
-
-      -- пометка: поле ввода (клик или F2 - редактировать)
-      draw_text("Пометка:", 16, note_y + (note_h - F_SMALL) / 2 - 1, col.dim)
-      local editing = edit and edit.it == it
-      set_color(col.bg); gfx.rect(note_x, note_y, note_w, note_h, 1)
-      set_color(editing and col.accent or col.border); gfx.rect(note_x, note_y, note_w, note_h, 0)
-      local ty = note_y + (note_h - F_SMALL) / 2 - 1
-      if editing then
-        local shown = clip_tail(edit.buf, note_w - 20)
-        draw_text(shown, note_x + 8, ty, col.text)
-        if math.floor(reaper.time_precise() * 2) % 2 == 0 then
-          set_color(col.text)
-          gfx.rect(note_x + 8 + gfx.measurestr(shown) + 1, note_y + 4, 1, note_h - 8, 1)
-        end
-      elseif it.note ~= "" then
-        draw_text(clip_head(it.note, note_w - 20), note_x + 8, ty, col.tag)
-      else
-        draw_text("нет - клик или F2, чтобы добавить (Enter - сохранить)", note_x + 8, ty, col.dim)
-      end
-      if lclick and not edit and mouse_in(note_x, note_y, note_w, note_h) then start_edit() end
-
-      local bx = w - 16 - BTN_W
-      act_fav = draw_button(bx, info_y + 6, BTN_W, 24, it.fav and "★ Убрать из избранного" or "☆ В избранное",
-        true, lclick, nil, F_SMALL)
-      act_note = draw_button(bx, info_y + 33, BTN_W, 24, "Пометка (F2)", true, lclick, nil, F_SMALL)
-      act_reveal = draw_button(bx, info_y + 60, BTN_W, 24, "Показать в папке", it.exists, lclick, nil, F_SMALL)
-    end
+  ImGui.SetCursorPosY(ctx, h - 84)
+  local opt
+  local ch, v = ImGui.Checkbox(ctx, "Пропускать папки Backups (копии и автосохранения REAPER)", lib.skip_backups)
+  if ch then opt = "skip_backups" end
+  ch, v = ImGui.Checkbox(ctx, "Учитывать резервные копии .rpp-bak", lib.with_bak)
+  if ch then opt = "with_bak" end
+  ImGui.PopStyleVar(ctx)
+  ImGui.EndChild(ctx)
+  if opt then
+    lib[opt] = not lib[opt]
+    lib.save_settings()
+    status = "Настройка применится при следующем сканировании."
+  elseif rm_dir then
+    lib.remove_dir(rm_dir)
   end
+end
 
-  -- окно «Папки»: закрывает список и панель проекта
-  local rm_dir, opt_click
-  if show_settings then
-    set_color(col.bg); gfx.rect(0, HEAD_H, w, foot_y - HEAD_H, 1)
-    set_color(col.border); gfx.rect(0, HEAD_H, w, 1, 1)
-    gfx.setfont(1, "Arial", F_TITLE)
-    draw_text("Папки для поиска проектов", 16, HEAD_H + 12, col.text)
-    gfx.setfont(1, "Arial", F_SMALL)
-    draw_text("Проекты (.rpp) ищутся в этих папках и во всех вложенных. Файлы проектов не изменяются.",
-      16, HEAD_H + 42, col.dim)
-    if #lib.dirs == 0 then
-      draw_text("Папок нет. Нажмите «Добавить папку…».", 16, SET_ROW_Y0 + 10, col.dim)
-    end
-    for i, d in ipairs(lib.dirs) do
-      local ry = SET_ROW_Y0 + (i - 1) * SET_ROW_H
-      if ry + SET_ROW_H > foot_y - 100 then break end
-      if i % 2 == 0 then set_color(col.row_alt); gfx.rect(0, ry, w, SET_ROW_H, 1) end
-      gfx.setfont(1, "Arial", F_ROW)
-      draw_text(clip_tail(d, w - 32 - 110), 16, ry + (SET_ROW_H - F_ROW) / 2 - 1, col.text)
-      if draw_button(w - 16 - 90, ry + 4, 90, 26, "Убрать", true, click, nil, F_SMALL) then rm_dir = i end
-    end
-    local options = {
-      { key = "skip_backups", y = foot_y - 84, label = "Пропускать папки Backups (копии и автосохранения REAPER)" },
-      { key = "with_bak", y = foot_y - 50, label = "Учитывать резервные копии .rpp-bak" },
-    }
-    for _, o in ipairs(options) do
-      draw_checkbox(16, o.y + 4, lib[o.key])
-      gfx.setfont(1, "Arial", F_ROW)
-      draw_text(o.label, 46, o.y + 5, col.text)
-      if click and mouse_in(16, o.y, w - 32, 28) then opt_click = o.key end
-    end
-  end
-
-  -- подвал
-  set_color(col.panel); gfx.rect(0, foot_y, w, FOOT_H, 1)
-  set_color(col.border); gfx.rect(0, foot_y, w, 1, 1)
-
-  -- галочка «Открывать в новой вкладке» - справа в строке статуса
+----------------------------------------------------------------------
+-- Окно: подвал со статусом и кнопками действий
+----------------------------------------------------------------------
+local function draw_footer(win_w)
+  if not begin_panel("##foot", win_w, FOOT_H, C.panel, OX, 6) then return end
+  local sx, sy = ImGui.GetCursorScreenPos(ctx)
+  local dl = ImGui.GetWindowDrawList(ctx)
+  ImGui.DrawList_AddLine(dl, sx - OX, sy - 6, sx - OX + win_w, sy - 6, C.border)
+  local inner_w = win_w - OX * 2
   local tab_w = 260
+
+  -- статус слева, справа - галочка «Открывать в новой вкладке»
+  ImGui.SetCursorPosY(ctx, 12)
+  ImGui.PushFont(ctx, font, F_SMALL)
+  ImGui.TextColored(ctx, C.dim, clip_tail(status, inner_w - (show_settings and 0 or tab_w + 12)))
   if not show_settings then
-    local tx = w - 16 - tab_w
-    draw_checkbox(tx, foot_y + 6, open_new_tab)
-    gfx.setfont(1, "Arial", F_SMALL)
-    draw_text("Открывать в новой вкладке", tx + CB + 8, foot_y + 9, col.text)
-    if click and mouse_in(tx, foot_y + 4, tab_w, 26) then
-      open_new_tab = not open_new_tab
+    ImGui.SameLine(ctx, win_w - OX - tab_w, 0)
+    ImGui.SetCursorPosY(ctx, 6)
+    local ch, v = ImGui.Checkbox(ctx, "Открывать в новой вкладке", open_new_tab)
+    if ch then
+      open_new_tab = v
       reaper.SetExtState(EXT_SECTION, "open_new_tab", open_new_tab and "1" or "0", true)
       status = open_new_tab and "Проекты открываются в новой вкладке."
         or "Проекты открываются в текущей вкладке: REAPER спросит о сохранении."
     end
   end
+  ImGui.PopFont(ctx)
 
-  gfx.setfont(1, "Arial", F_SMALL)
-  draw_text(clip_tail(status, w - 32 - (show_settings and 0 or tab_w + 12)), 16, foot_y + 13, col.dim)
-
-  local bh, by, gap = 46, foot_y + 52, 10
-  local act_auto, act_open, act_del, act_undo, act_close, act_scan, act_add, act_back
-  local target -- что откроет кнопка «Открыть»
+  ImGui.SetCursorPosY(ctx, FOOT_H - 6 - 46 - 6)
   local scan_label = lib.scan and "Остановить сканирование" or "Пересканировать"
   local scan_enabled = lib.scan ~= nil or #lib.dirs > 0
+  local target -- что откроет кнопка «Открыть»
+  local clicked
   if show_settings then
-    local bw = (w - 32 - gap * 3) / 4
-    act_add = draw_button(16, by, bw, bh, "Добавить папку…", true, click, col.accent)
-    act_scan = draw_button(16 + (bw + gap), by, bw, bh, scan_label, scan_enabled, click)
-    act_back = draw_button(16 + (bw + gap) * 2, by, bw, bh, "Назад к списку", true, click)
-    act_close = draw_button(16 + (bw + gap) * 3, by, bw, bh, "Закрыть", true, click)
+    clicked = button_row({
+      { label = "Добавить папку…", id = "add", color = C.accent },
+      { label = scan_label, id = "scan", enabled = scan_enabled },
+      { label = "Назад к списку", id = "back" },
+      { label = "Закрыть", id = "close" } }, inner_w, 46)
   elseif source == "library" then
     target = cursor
-    local bw = (w - 32 - gap * 2) / 3
-    act_scan = draw_button(16, by, bw, bh, scan_label, scan_enabled, click)
-    act_open = draw_button(16 + (bw + gap), by, bw, bh, "Открыть", target ~= nil and target.exists, click, col.accent)
-    act_close = draw_button(16 + (bw + gap) * 2, by, bw, bh, "Закрыть", true, click)
+    clicked = button_row({
+      { label = scan_label, id = "scan", enabled = scan_enabled },
+      { label = "Открыть", id = "open", enabled = target ~= nil and target.exists, color = C.accent },
+      { label = "Закрыть", id = "close" } }, inner_w, 46)
   else
     local n_missing, n_checked = count_missing_unprotected(), count_checked()
     -- «Открыть»: единственный отмеченный проект, а если отметок нет - проект под курсором
@@ -1668,66 +1694,124 @@ local function draw()
       target = cursor
     end
     local last_undo = undo_stack[#undo_stack]
-    local bw = (w - 32 - gap * 4) / 5
-    act_auto = draw_button(16, by, bw, bh,
-      string.format("Убрать пропавшие (%d)", n_missing), n_missing > 0, click)
-    act_open = draw_button(16 + (bw + gap), by, bw, bh, "Открыть", target ~= nil and target.exists, click, col.accent)
-    act_del = draw_button(16 + (bw + gap) * 2, by, bw, bh,
-      string.format("Удалить выбранные (%d)", n_checked), n_checked > 0, click, col.btn_danger)
-    act_undo = draw_button(16 + (bw + gap) * 3, by, bw, bh,
-      last_undo and string.format("Вернуть удалённые (%d)", #last_undo.removed) or "Вернуть удалённые",
-      last_undo ~= nil, click)
-    act_close = draw_button(16 + (bw + gap) * 4, by, bw, bh, "Закрыть", true, click)
+    clicked = button_row({
+      { label = string.format("Убрать пропавшие (%d)", n_missing), id = "auto", enabled = n_missing > 0 },
+      { label = "Открыть", id = "open", enabled = target ~= nil and target.exists, color = C.accent },
+      { label = string.format("Удалить выбранные (%d)", n_checked), id = "del", enabled = n_checked > 0, color = C.btn_danger },
+      { label = last_undo and string.format("Вернуть удалённые (%d)", #last_undo.removed) or "Вернуть удалённые",
+        id = "undo", enabled = last_undo ~= nil },
+      { label = "Закрыть", id = "close" } }, inner_w, 46)
   end
+  ImGui.EndChild(ctx)
 
-  if opt_click then
-    lib[opt_click] = not lib[opt_click]
-    lib.save_settings()
-    status = "Настройка применится при следующем сканировании."
-  elseif rm_dir then
-    lib.remove_dir(rm_dir)
-  elseif fav_now then
-    toggle_fav(fav_now)
-  elseif open_now then
-    open_project(open_now)
-  elseif act_fav then
-    toggle_fav(cursor)
-  elseif act_note then
-    start_edit()
-  elseif act_reveal then
-    reveal_in_folder(cursor)
-  elseif act_add then
-    lib.add_folder_dialog()
-  elseif act_scan then
+  if clicked == "add" then
+    defer_action(function() lib.add_folder_dialog() end)
+  elseif clicked == "scan" then
     if lib.scan then lib.stop_scan() else lib.start_scan() end
-  elseif act_back then
+  elseif clicked == "back" then
     show_settings = false
-  elseif act_auto then
+  elseif clicked == "auto" then
     local doomed = {}
     for _, it in ipairs(view) do if not it.exists and not it.fav then doomed[it.path] = true end end
-    remove_where(function(path) return doomed[path] == true end)
-  elseif act_open then
-    open_project(target)
-  elseif act_del then
+    defer_action(function() remove_where(function(path) return doomed[path] == true end) end)
+  elseif clicked == "open" then
+    local it = target
+    defer_action(function() open_project(it) end)
+  elseif clicked == "del" then
     local doomed, n_fav = {}, 0
     for _, it in ipairs(view) do
       if it.checked then doomed[it.path] = true; if it.fav then n_fav = n_fav + 1 end end
     end
-    local go = true
-    if n_fav > 0 then
-      go = reaper.ShowMessageBox(string.format(
-        "Среди отмеченных проектов есть избранные: %d.\nВсё равно убрать их из списка?", n_fav), TITLE, 4) == 6
-    end
-    if go then
-      remove_where(function(path) return doomed[path] == true end)
-    else
-      status = "Удаление отменено."
-    end
-  elseif act_undo then
-    restore_last()
-  elseif act_close then
-    return "close"
+    defer_action(function()
+      local go = true
+      if n_fav > 0 then
+        go = reaper.ShowMessageBox(string.format(
+          "Среди отмеченных проектов есть избранные: %d.\nВсё равно убрать их из списка?", n_fav), TITLE, 4) == 6
+      end
+      if go then
+        remove_where(function(path) return doomed[path] == true end)
+      else
+        status = "Удаление отменено."
+      end
+    end)
+  elseif clicked == "undo" then
+    defer_action(restore_last)
+  elseif clicked == "close" then
+    want_close = true
   end
+end
+
+----------------------------------------------------------------------
+-- Окно: кадр
+----------------------------------------------------------------------
+local saved_w, saved_h = WIN_W, WIN_H
+do
+  local sw, sh = tonumber(reaper.GetExtState(EXT_SECTION, "win_w")), tonumber(reaper.GetExtState(EXT_SECTION, "win_h"))
+  if sw and sh and sw >= MIN_W and sh >= MIN_H and sw <= 5000 and sh <= 4000 then saved_w, saved_h = sw, sh end
+end
+
+local function draw_window()
+  local win_w, win_h = ImGui.GetWindowSize(ctx)
+  -- размер окна запоминается между запусками
+  if (win_w ~= saved_w or win_h ~= saved_h) and win_w >= MIN_W and win_h >= MIN_H then
+    saved_w, saved_h = win_w, win_h
+    reaper.SetExtState(EXT_SECTION, "win_w", tostring(math.floor(saved_w)), true)
+    reaper.SetExtState(EXT_SECTION, "win_h", tostring(math.floor(saved_h)), true)
+  end
+  handle_keys()
+  if lib.scan then lib.scan_step() end
+
+  ImGui.Dummy(ctx, 0, 8)
+  draw_top(win_w)
+
+  ImGui.PushStyleVar(ctx, ImGui.StyleVar_ItemSpacing, ITEM_GAP, 0) -- панели стоят вплотную друг к другу
+  local _, avail_h = ImGui.GetContentRegionAvail(ctx)
+  if show_settings then
+    draw_settings(win_w, math.max(60, avail_h - FOOT_H))
+  else
+    local L = layout(win_w - OX - RIGHT_PAD)
+    list_h = math.max(60, avail_h - COLS_H - INFO_H - FOOT_H)
+    draw_columns_header(win_w, L)
+    draw_list(win_w, L, list_h)
+    draw_info(win_w)
+  end
+  draw_footer(win_w)
+  ImGui.PopStyleVar(ctx)
+end
+
+local THEME_COLORS = {
+  { ImGui.Col_WindowBg, C.bg }, { ImGui.Col_ChildBg, C.bg }, { ImGui.Col_PopupBg, C.panel },
+  { ImGui.Col_Text, C.text }, { ImGui.Col_TextDisabled, C.dim }, { ImGui.Col_Border, C.border },
+  { ImGui.Col_FrameBg, C.bg }, { ImGui.Col_FrameBgHovered, C.panel }, { ImGui.Col_FrameBgActive, C.panel },
+  { ImGui.Col_Button, C.btn }, { ImGui.Col_ButtonHovered, C.btn_hover }, { ImGui.Col_ButtonActive, C.accent },
+  { ImGui.Col_Header, C.panel }, { ImGui.Col_HeaderHovered, C.panel }, { ImGui.Col_HeaderActive, C.btn_hover },
+  { ImGui.Col_ScrollbarBg, C.bg }, { ImGui.Col_ScrollbarGrab, C.border },
+  { ImGui.Col_ScrollbarGrabHovered, C.dim }, { ImGui.Col_ScrollbarGrabActive, C.accent },
+  { ImGui.Col_TitleBg, C.panel }, { ImGui.Col_TitleBgActive, C.panel }, { ImGui.Col_CheckMark, C.accent },
+  { ImGui.Col_TextSelectedBg, rgba(col.accent, 110) },
+}
+
+local WINDOW_FLAGS = ImGui.WindowFlags_NoCollapse | ImGui.WindowFlags_NoScrollbar | ImGui.WindowFlags_NoScrollWithMouse
+
+local function frame()
+  for _, c in ipairs(THEME_COLORS) do ImGui.PushStyleColor(ctx, c[1], c[2]) end
+  ImGui.PushStyleVar(ctx, ImGui.StyleVar_WindowPadding, OX, 0)
+  ImGui.PushStyleVar(ctx, ImGui.StyleVar_ItemSpacing, ITEM_GAP, 6)
+  ImGui.PushStyleVar(ctx, ImGui.StyleVar_FramePadding, 10, 6)
+  ImGui.PushStyleVar(ctx, ImGui.StyleVar_FrameRounding, 3)
+  ImGui.PushStyleVar(ctx, ImGui.StyleVar_ScrollbarSize, SB)
+  ImGui.PushFont(ctx, font, F_ROW)
+  ImGui.SetNextWindowSize(ctx, saved_w, saved_h, ImGui.Cond_FirstUseEver)
+  ImGui.SetNextWindowSizeConstraints(ctx, MIN_W, MIN_H, 8000, 8000)
+  local visible, open = ImGui.Begin(ctx, WINDOW_TITLE, true, WINDOW_FLAGS)
+  if visible then
+    draw_window()
+    ImGui.End(ctx)
+  end
+  ImGui.PopFont(ctx)
+  ImGui.PopStyleVar(ctx, 5)
+  ImGui.PopStyleColor(ctx, #THEME_COLORS)
+  return open and not want_close
 end
 
 ----------------------------------------------------------------------
@@ -1739,30 +1823,11 @@ if not ok then
   return
 end
 
--- размер окна запоминается между запусками
-local saved_w, saved_h = WIN_W, WIN_H
-do
-  local sw, sh = tonumber(reaper.GetExtState(EXT_SECTION, "win_w")), tonumber(reaper.GetExtState(EXT_SECTION, "win_h"))
-  if sw and sh and sw >= MIN_W and sh >= MIN_H and sw <= 5000 and sh <= 4000 then saved_w, saved_h = sw, sh end
-end
-gfx.init(TITLE, saved_w, saved_h)
-
 local function loop()
-  -- за кадр может накопиться несколько нажатий; предел - защита от зависания
-  for _ = 1, 64 do
-    local ch = gfx.getchar()
-    if ch < 0 then gfx.quit(); return end
-    if ch == 0 then break end
-    if handle_key(ch) == "close" then gfx.quit(); return end
-  end
-  if lib.scan then lib.scan_step() end
-  if (gfx.w ~= saved_w or gfx.h ~= saved_h) and gfx.w >= MIN_W and gfx.h >= MIN_H then
-    saved_w, saved_h = gfx.w, gfx.h
-    reaper.SetExtState(EXT_SECTION, "win_w", tostring(math.floor(saved_w)), true)
-    reaper.SetExtState(EXT_SECTION, "win_h", tostring(math.floor(saved_h)), true)
-  end
-  if draw() == "close" then gfx.quit(); return end
-  gfx.update()
-  reaper.defer(loop)
+  -- модальные окна и открытие проектов - вне кадра ReaImGui
+  local todo = later
+  later = {}
+  for _, fn in ipairs(todo) do fn() end
+  if frame() then reaper.defer(loop) end
 end
 loop()
