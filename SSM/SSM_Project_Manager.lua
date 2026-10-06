@@ -1433,6 +1433,7 @@ local function draw_columns_header(win_w, L)
     local x = x0 + dv.x
     ImGui.DrawList_AddLine(dl, x, sy + 4, x, sy + COLS_H - 4, hot and C.accent or C.border, hot and 3 or 1)
   end
+  ImGui.Dummy(ctx, 0, 0) -- окно заканчивается виджетом: после SetCursorPos* нужен виджет, иначе ImGui ругается в EndChild
   ImGui.EndChild(ctx)
 end
 
@@ -1526,6 +1527,7 @@ local function draw_list(win_w, L, h)
   end
   ImGui.PopFont(ctx)
   ImGui.PopStyleVar(ctx)
+  ImGui.Dummy(ctx, 0, 0) -- окно заканчивается виджетом: после SetCursorPos* нужен виджет, иначе ImGui ругается в EndChild
   ImGui.EndChild(ctx)
   if fav_now then toggle_fav(fav_now)
   elseif open_now then local it = open_now; defer_action(function() open_project(it) end) end
@@ -1600,6 +1602,7 @@ local function draw_info(win_w)
     elseif act_note then start_edit()
     elseif act_reveal then defer_action(function() reveal_in_folder(it) end) end
   end
+  ImGui.Dummy(ctx, 0, 0) -- окно заканчивается виджетом: после SetCursorPos* нужен виджет, иначе ImGui ругается в EndChild
   ImGui.EndChild(ctx)
 end
 
@@ -1630,6 +1633,7 @@ local function draw_settings(win_w, h)
   ch, v = ImGui.Checkbox(ctx, "Учитывать резервные копии .rpp-bak", lib.with_bak)
   if ch then opt = "with_bak" end
   ImGui.PopStyleVar(ctx)
+  ImGui.Dummy(ctx, 0, 0) -- окно заканчивается виджетом: после SetCursorPos* нужен виджет, иначе ImGui ругается в EndChild
   ImGui.EndChild(ctx)
   if opt then
     lib[opt] = not lib[opt]
@@ -1702,6 +1706,7 @@ local function draw_footer(win_w)
         id = "undo", enabled = last_undo ~= nil },
       { label = "Закрыть", id = "close" } }, inner_w, 46)
   end
+  ImGui.Dummy(ctx, 0, 0) -- окно заканчивается виджетом: после SetCursorPos* нужен виджет, иначе ImGui ругается в EndChild
   ImGui.EndChild(ctx)
 
   if clicked == "add" then
@@ -1777,6 +1782,7 @@ local function draw_window()
   end
   draw_footer(win_w)
   ImGui.PopStyleVar(ctx)
+  ImGui.Dummy(ctx, 0, 0) -- см. выше: окно заканчивается виджетом
 end
 
 local THEME_COLORS = {
