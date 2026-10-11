@@ -4,6 +4,9 @@
 # SSM_DI_Guitar_Align.lua и SSM_AI_Drummer.lua публичны (решение владельца 2026-10-05), но без своих
 # модулей не работают: модуль детектора нот и движок барабанщика не публикуются.
 SSM/SSM_DI_Detector.lua
+# выравниватель живых барабанов: до решения владельца закрыт (2026-10-06)
+SSM/SSM_Drum_Align.lua
+SSM/SSM_Drum_Detector.lua
 SSM/*.rar
 SSM/.claude/
 # рабочая папка: тесты, инструменты, документы, записи, эффекты, результаты запусков
@@ -16,3 +19,4 @@ CLAUDE.md
 __pycache__/
 *.pyc
 paths.local.json
+SSM/SSM_Project_Manager4.0.lua
