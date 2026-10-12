@@ -20,3 +20,5 @@ __pycache__/
 *.pyc
 paths.local.json
 SSM/SSM_Project_Manager4.0.lua
+# копия публичного релиза плагина Best Trigger 3 (вложенный чужой git; настоящая - <корень>\Release\Best-Trigger-3): не наша, в коммит не попадает
+Best-Trigger-3/
