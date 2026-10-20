@@ -296,5 +296,19 @@
         <source main="main" file="../SSM_AI_Drummer.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_AI_Drummer.lua</source>
       </version>
     </reapack>
+    <reapack name="SSM_Auto_Prepare_Project.lua" type="script">
+      <metadata>
+        <description>SSM_Auto_Prepare_Project</description>
+      </metadata>
+      <version name="1.0" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.0 Релиз
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Auto_Prepare_Project.lua -->
+        <source main="main" file="../SSM_Auto_Prepare_Project.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Auto_Prepare_Project.lua</source>
+      </version>
+    </reapack>
   </category>
 </index>
