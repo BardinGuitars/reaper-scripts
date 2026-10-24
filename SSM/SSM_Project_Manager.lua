@@ -1,5 +1,5 @@
 -- @description SSM_Project_Manager
--- @version 3.3
+-- @version 3.4
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
@@ -38,7 +38,8 @@
 --     - для проекта под курсором: версия REAPER, темп, частота, число треков,
 --       примерная длина, плагины (читается из .rpp);
 --     - «Показать в папке» открывает проводник (Finder) на файле проекта.
---   Открытие: двойной клик, Enter или кнопка «Открыть». Галочка «Открывать в новой
+--   Открытие: двойной клик, Enter или кнопка «Открыть». Если отмечено несколько проектов - кнопка «Открыть отмеченные (N)» открывает их все
+--   по очереди в новых вкладках. Галочка «Открывать в новой
 --   вкладке» справа над кнопками: включена - проект открывается в новой вкладке
 --   REAPER; выключена - в текущей (тогда REAPER сам спросит, сохранить ли
 --   несохранённые изменения текущего проекта).
@@ -55,6 +56,8 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.4 «Открыть отмеченные»: если отмечено два проекта и больше, кнопка «Открыть» открывает их все по очереди, каждый в новой вкладке REAPER
+--   (при пяти и больше - сначала вопрос). Идёт по одному за кадр, видно ход («Открываю 3 из 8»), кнопка «Остановить» или Esc прерывает.
 --   3.3 Номер версии в заголовке окна (видно, какая версия запущена).
 --   3.2 Выбор, как открывать проект: в новой вкладке или в текущей (галочка
 --   «Открывать в новой вкладке»). В текущей вкладке REAPER спрашивает о
@@ -830,6 +833,45 @@ local function open_project(it)
   end
 end
 
+-- Несколько отмеченных проектов открываются по очереди: по одному за кадр окна (окно не замирает, видно ход
+-- и можно остановить). Всегда в новых вкладках: в текущей вкладке каждый следующий закрыл бы предыдущий.
+local open_queue -- { list = {проекты}, i = номер следующего, total = всего, missing = пропавших файлов }
+
+local function start_open_queue(checked)
+  local list, missing = {}, 0
+  for _, it in ipairs(checked) do
+    if it.exists then list[#list + 1] = it else missing = missing + 1 end
+  end
+  if #list == 0 then status = "Отмеченные проекты не найдены на диске - открывать нечего."; return end
+  if #list >= 5 then
+    local ans = reaper.ShowMessageBox(string.format(
+      "Открыть по очереди %d проектов в новых вкладках?\nREAPER будет занят, пока они загружаются (остановить можно кнопкой или Esc).", #list), TITLE, 4)
+    if ans ~= 6 then status = "Открытие отменено."; return end
+  end
+  open_queue = { list = list, i = 1, total = #list, missing = missing }
+end
+
+local function stop_open_queue(why)
+  if not open_queue then return end
+  local q = open_queue
+  open_queue = nil
+  status = string.format("%s: открыто %d из %d%s.", why, q.i - 1, q.total,
+    q.missing > 0 and string.format(", пропавших файлов пропущено: %d", q.missing) or "")
+end
+
+-- один проект очереди (вызывается раз за кадр)
+local function open_queue_step()
+  local q = open_queue
+  if not q then return end
+  if q.i > q.total then stop_open_queue("Готово"); return end
+  local it = q.list[q.i]
+  status = string.format("Открываю %d из %d: %s", q.i, q.total, it.path:match("([^\\/]+)$") or it.path)
+  reaper.Main_OnCommand(40859, 0)
+  reaper.Main_openProject("noprompt:" .. it.path)
+  q.i = q.i + 1
+  if q.i > q.total then stop_open_queue("Готово") end
+end
+
 -- Показывает файл проекта в проводнике / Finder
 local function reveal_in_folder(it)
   if not it or not it.exists then status = "Файл не найден - показывать нечего."; return end
@@ -1113,7 +1155,9 @@ local function handle_key(ch)
     return
   end
   local idx = index_of(cursor) or 1
-  if ch == 27 then
+  if ch == 27 and open_queue then
+    stop_open_queue("Остановлено")
+  elseif ch == 27 then
     if query ~= "" then set_query("") else return "close" end
   elseif ch == 13 then open_project(cursor)
   elseif ch == KEY.up then move_cursor_to(idx - 1)
@@ -1644,6 +1688,7 @@ local function draw()
 
   local bh, by, gap = 46, foot_y + 52, 10
   local act_auto, act_open, act_del, act_undo, act_close, act_scan, act_add, act_back
+  local multi_checked -- отмеченные проекты, если их два и больше (кнопка «Открыть отмеченные»)
   local target -- что откроет кнопка «Открыть»
   local scan_label = lib.scan and "Остановить сканирование" or "Пересканировать"
   local scan_enabled = lib.scan ~= nil or #lib.dirs > 0
@@ -1671,7 +1716,18 @@ local function draw()
     local bw = (w - 32 - gap * 4) / 5
     act_auto = draw_button(16, by, bw, bh,
       string.format("Убрать пропавшие (%d)", n_missing), n_missing > 0, click)
-    act_open = draw_button(16 + (bw + gap), by, bw, bh, "Открыть", target ~= nil and target.exists, click, col.accent)
+    multi_checked = {}
+    for _, it in ipairs(view) do if it.checked then multi_checked[#multi_checked + 1] = it end end
+    if #multi_checked < 2 then multi_checked = nil end
+    local open_label, open_enabled = "Открыть", target ~= nil and target.exists
+    if open_queue then
+      open_label, open_enabled = string.format("Остановить (осталось %d)", open_queue.total - open_queue.i + 1), true
+    elseif multi_checked then
+      local n_exist = 0
+      for _, it in ipairs(multi_checked) do if it.exists then n_exist = n_exist + 1 end end
+      open_label, open_enabled = string.format("Открыть отмеченные (%d)", #multi_checked), n_exist > 0
+    end
+    act_open = draw_button(16 + (bw + gap), by, bw, bh, open_label, open_enabled, click, col.accent)
     act_del = draw_button(16 + (bw + gap) * 2, by, bw, bh,
       string.format("Удалить выбранные (%d)", n_checked), n_checked > 0, click, col.btn_danger)
     act_undo = draw_button(16 + (bw + gap) * 3, by, bw, bh,
@@ -1707,7 +1763,9 @@ local function draw()
     for _, it in ipairs(view) do if not it.exists and not it.fav then doomed[it.path] = true end end
     remove_where(function(path) return doomed[path] == true end)
   elseif act_open then
-    open_project(target)
+    if open_queue then stop_open_queue("Остановлено")
+    elseif multi_checked then start_open_queue(multi_checked)
+    else open_project(target) end
   elseif act_del then
     local doomed, n_fav = {}, 0
     for _, it in ipairs(view) do
@@ -1756,6 +1814,7 @@ local function loop()
     if handle_key(ch) == "close" then gfx.quit(); return end
   end
   if lib.scan then lib.scan_step() end
+  open_queue_step()
   if (gfx.w ~= saved_w or gfx.h ~= saved_h) and gfx.w >= MIN_W and gfx.h >= MIN_H then
     saved_w, saved_h = gfx.w, gfx.h
     reaper.SetExtState(EXT_SECTION, "win_w", tostring(math.floor(saved_w)), true)
