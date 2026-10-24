@@ -1,5 +1,5 @@
 -- @description SSM_Labor Safety
--- @version 1.43
+-- @version 1.44
 -- @author @ssm_metalmix
 -- @about
 --   🎧 Бережём слух и сохраняем продуктивность: Labor Safety v1.0 для REAPER!
@@ -17,6 +17,9 @@
 --   ☕ Boosty - https://boosty.to/boostbg
 --   🌐 VK - https://vk.ru/ssm_metalmix
 -- @changelog
+--   1.44 Автозапуск при старте REAPER без окна настроек: отсчёт стартует сразу с последними сохранёнными настройками. Для этого в __startup.lua
+--   (Scripts/__startup.lua) перед запуском действия ставится флаг: reaper.SetExtState("SSM_Labor_Safety", "autostart", "1", false). Обычный запуск
+--   по-прежнему открывает окно настроек.
 --   1.43 Скрипт больше не падает при запуске без расширения js_ReaScriptAPI.
 --   Порог «минимум активных плагинов» для снятия нагрузки вынесен в настройки
 --   (пункт 8, по умолчанию 10). В подсчёт теперь входят Input FX треков, плагины
@@ -1442,6 +1445,25 @@ end
 -- ============================================================
 -- SETTINGS WINDOW
 -- ============================================================
+-- Запуск отсчёта с текущими настройками (кнопка «Старт» и автозапуск при старте REAPER)
+local function begin_run()
+  is_running = true
+  continuous_sec = 0
+  last_play_time = nil
+  pause_start = nil
+  rest_shown = false
+  timer_locked = false
+  lang_dropdown_open = false
+  reset_idle_state()
+  if settings.show_float_timer == 1 then
+    open_timer_window()
+  else
+    window_open = false
+    ui_mode = "background"
+    gfx.quit()
+  end
+end
+
 local function draw_settings_window()
   local w, h = gfx.w, gfx.h
 
@@ -1636,21 +1658,7 @@ local function draw_settings_window()
 
   if hov and (gfx.mouse_cap & 1) == 1 and gfx.mouse_cap ~= last_mouse_cap then
     save_ini()
-    is_running = true
-    continuous_sec = 0
-    last_play_time = nil
-    pause_start = nil
-    rest_shown = false
-    timer_locked = false
-    lang_dropdown_open = false
-    reset_idle_state()
-    if settings.show_float_timer == 1 then
-      open_timer_window()
-    else
-      window_open = false
-      ui_mode = "background"
-      gfx.quit()
-    end
+    begin_run()
   end
 
   last_mouse_cap = gfx.mouse_cap
@@ -1863,5 +1871,14 @@ end
 -- ============================================================
 ensure_ini_exists()
 load_ini()
-open_settings_window()
+-- Автозапуск: __startup.lua перед запуском скрипта ставит флаг SSM_Labor_Safety / autostart = 1 (на один запуск) -
+-- тогда окно настроек не открывается, отсчёт стартует сразу с последними сохранёнными настройками.
+-- Обычный запуск (из списка действий) по-прежнему открывает окно настроек.
+local autostart = reaper.GetExtState("SSM_Labor_Safety", "autostart") == "1"
+if autostart then reaper.DeleteExtState("SSM_Labor_Safety", "autostart", false) end
+if autostart then
+  begin_run()
+else
+  open_settings_window()
+end
 reaper.defer(main_loop)

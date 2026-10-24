@@ -5,6 +5,24 @@
       <metadata>
         <description>SSM_Labor_Safety</description>
       </metadata>
+      <version name="1.44" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.44 Автозапуск при старте REAPER без окна настроек: отсчёт стартует сразу с последними сохранёнными настройками. Для этого в __startup.lua
+(Scripts/__startup.lua) перед запуском действия ставится флаг: reaper.SetExtState("SSM_Labor_Safety", "autostart", "1", false). Обычный запуск
+по-прежнему открывает окно настроек.
+1.43 Скрипт больше не падает при запуске без расширения js_ReaScriptAPI.
+Порог «минимум активных плагинов» для снятия нагрузки вынесен в настройки
+(пункт 8, по умолчанию 10). В подсчёт теперь входят Input FX треков, плагины
+на items и содержимое контейнеров; байпасснутые и офлайн-плагины не считаются.
+1.42 Снятие нагрузки при простое теперь срабатывает только если в проекте
+реально есть чем грузить CPU (минимум 10 активных плагинов на треках/мастере) -
+пустой или лёгкий проект больше не выгружается зря.
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Labor_Safety.lua -->
+        <source main="main" file="../SSM_Labor_Safety.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Labor_Safety.lua</source>
+      </version>
       <version name="1.43" author="@ssm_metalmix">
 
 <changelog>
