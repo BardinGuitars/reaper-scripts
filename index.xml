@@ -318,6 +318,20 @@
       <metadata>
         <description>SSM_Auto_Prepare_Project</description>
       </metadata>
+      <version name="1.2" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.2 Загрузка папки: перед проверкой можно выбрать папку с аудиофайлами через окно ОС (нужен js_ReaScriptAPI, без него путь вводится вручную): файлы (и из вложенных
+папок) загружаются новыми дорожками, имя дорожки - имя файла, потом проверяются моно, панорама, дубликаты и раскладка по папкам. Загрузка - отдельный шаг Undo.
+1.2 Раскладка по папкам: внутри CYMBALS оверхеды (OH) и румы (ROOM) лежат каждые в своей папке: DRUMS > CYMBALS > OH, ROOM (хэт, райд, крэш - прямо в CYMBALS).
+1.1 Окно согласия с галочками (на каждую функцию и на каждое изменение). Новое: поиск и удаление дубликатов айтемов (и пустых после этого дорожек),
+раскладка дорожек по папкам (DRUMS / KICK / SD / TOMS / CYMBALS, BASS, GTR, VOX, INST) по образцу ваших проектов.
+1.0 Релиз
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Auto_Prepare_Project.lua -->
+        <source main="main" file="../SSM_Auto_Prepare_Project.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Auto_Prepare_Project.lua</source>
+      </version>
       <version name="1.1" author="@ssm_metalmix">
 <changelog>
 <![CDATA[

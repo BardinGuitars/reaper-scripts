@@ -1,5 +1,5 @@
 -- @description SSM_Auto_Prepare_Project
--- @version 1.1
+-- @version 1.2
 -- @author @ssm_metalmix
 -- @about
 --   🧹 Автоподготовка проекта: быстро наводит порядок в только что собранном проекте. Скрипт сначала анализирует проект,
@@ -12,14 +12,18 @@
 --   2) Панорама по названию трека: L, Left, Лево, Л - влево до упора; R, Right, Право, П - вправо. Если в названии есть и то и другое - не трогает.
 --   3) Дубликаты: два айтема с одним и тем же звуком в одном и том же месте (на разных дорожках) - один удаляется; если он был
 --   единственным на дорожке, удаляется и дорожка (кроме папок, дорожек с плагинами и дорожек с посылами).
---   4) Раскладка дорожек по папкам: барабаны (бочка, малый, томы, тарелки и румы), бас, гитары, вокал, синты и клавиши - по названиям.
+--   4) Раскладка дорожек по папкам: барабаны (бочка, малый, томы, тарелки; оверхеды и румы - каждые в своей папке внутри тарелок), бас, гитары, вокал, синты и клавиши - по названиям.
 --   Если подходящая папка в проекте уже есть, дорожка уходит в неё, иначе папка создаётся (когда в ней будет две дорожки и больше).
 --   Дорожки, которые уже лежат в папках, не трогаются.
+--   5) Загрузка папки: при запуске скрипт предлагает выбрать папку с аудиофайлами (окно ОС), сам загружает файлы новыми дорожками и проверяет их по пунктам 1-4.
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 --   ☕ Boosty - https://boosty.to/boostbg
 --   🌐 VK - https://vk.ru/ssm_metalmix
 -- @changelog
+--   1.2 Загрузка папки: перед проверкой можно выбрать папку с аудиофайлами через окно ОС (нужен js_ReaScriptAPI, без него путь вводится вручную): файлы (и из вложенных
+--   папок) загружаются новыми дорожками, имя дорожки - имя файла, потом проверяются моно, панорама, дубликаты и раскладка по папкам. Загрузка - отдельный шаг Undo.
+--   1.2 Раскладка по папкам: внутри CYMBALS оверхеды (OH) и румы (ROOM) лежат каждые в своей папке: DRUMS > CYMBALS > OH, ROOM (хэт, райд, крэш - прямо в CYMBALS).
 --   1.1 Окно согласия с галочками (на каждую функцию и на каждое изменение). Новое: поиск и удаление дубликатов айтемов (и пустых после этого дорожек),
 --   раскладка дорожек по папкам (DRUMS / KICK / SD / TOMS / CYMBALS, BASS, GTR, VOX, INST) по образцу ваших проектов.
 --   1.0 Релиз
@@ -39,6 +43,11 @@ local DUP_POS_TOL = 0.001   -- дубликат: начало и длина со
 local HASH_WINDOWS = 12     -- дубликат: звук сравнивается по стольким кускам, равномерно по айтему
 local HASH_FRAMES = 4096    -- ...длиной в столько кадров каждый
 local FOLDER_MIN_TRACKS = 2 -- новая папка создаётся, если в ней будет не меньше стольких дорожек
+local IMPORT_SUBFOLDERS = true -- загрузка папки: брать файлы и из вложенных папок
+local IMPORT_DEPTH = 3         -- ...не глубже стольких уровней
+local EXT_SECTION = "SSM_Auto_Prepare_Project"
+local AUDIO_EXT = { wav = true, wave = true, w64 = true, aif = true, aiff = true, aifc = true, flac = true, mp3 = true, ogg = true,
+  opus = true, wv = true, caf = true, m4a = true }
 
 ----------------------------------------------------------------------
 -- Название трека -> сторона панорамы
@@ -143,8 +152,10 @@ local CATEGORY_RULES = {
   { path = { "DRUMS", "KICK" }, exact = { "kick", "kicks", "kik", "kd", "bd", "subkick", "бочка", "бочки" }, prefix = { "kick" }, phrase = { "bass drum", "bassdrum" } },
   { path = { "DRUMS", "SD" }, exact = { "snare", "snares", "snr", "sd", "малый", "рабочий" }, prefix = { "snare" } },
   { path = { "DRUMS", "TOMS" }, exact = { "tom", "toms", "floor", "rack", "том", "томы" }, tom_digit = true },
-  { path = { "DRUMS", "CYMBALS" }, exact = { "oh", "ohs", "overhead", "overheads", "hat", "hats", "hh", "hihat", "ride", "crash", "splash", "china",
-      "cymbal", "cymbals", "room", "rooms", "оверхед", "тарелки", "хет", "хэт", "райд", "крэш" }, prefix = { "hihat", "overhead" } },
+  { path = { "DRUMS", "CYMBALS", "OH" }, exact = { "oh", "ohs", "overhead", "overheads", "оверхед", "оверхеды" }, prefix = { "overhead" } },
+  { path = { "DRUMS", "CYMBALS", "ROOM" }, exact = { "room", "rooms", "рум", "румы" } },
+  { path = { "DRUMS", "CYMBALS" }, exact = { "hat", "hats", "hh", "hihat", "ride", "crash", "splash", "china",
+      "cymbal", "cymbals", "тарелки", "хет", "хэт", "райд", "крэш" }, prefix = { "hihat" } },
   { path = { "DRUMS" }, exact = { "drums", "drum", "drumkit", "барабаны" } },
   { path = { "BASS" }, exact = { "bass", "bas", "бас", "басс" }, prefix = { "bass" } },
   { path = { "GTR" }, exact = { "gtr", "gtrs", "guitar", "guitars", "guit", "git", "gitar", "гитара", "гитары" }, prefix = { "guitar", "gtr" } },
@@ -161,11 +172,13 @@ end
 -- Под какими словами в названии существующая папка считается папкой этой категории
 local FOLDER_ALIASES = {
   DRUMS = { "drums", "drum", "drumkit", "барабаны" }, KICK = { "kick", "kicks", "kik", "bd", "kd" }, SD = { "sd", "snare", "snr" },
-  TOMS = { "toms", "tom", "t" }, CYMBALS = { "cymbals", "cymbal", "c" }, BASS = { "bass", "бас", "басс" },
+  TOMS = { "toms", "tom", "t" }, CYMBALS = { "cymbals", "cymbal", "c" }, OH = { "oh", "ohs", "overhead", "overheads" }, ROOM = { "room", "rooms" },
+  BASS = { "bass", "бас", "басс" },
   GTR = { "gtr", "gtrs", "guitar", "guitars" }, VOX = { "vox", "vocal", "vocals" }, INST = { "inst", "synths", "synth", "keys" },
 }
 local CANON_ORDER = { DRUMS = 1, BASS = 2, GTR = 3, VOX = 4, INST = 5 } -- порядок новых папок верхнего уровня
 local SUB_ORDER = { KICK = 1, SD = 2, TOMS = 3, CYMBALS = 4 }
+local SUB2_ORDER = { OH = 1, ROOM = 2 } -- внутри CYMBALS: сначала папка OH, потом ROOM, потом отдельные дорожки (хэт, райд ...)
 
 -- Категория дорожки по названию: список вида { "DRUMS", "KICK" } или nil
 local function track_category(name)
@@ -250,8 +263,10 @@ local function find_folder(scope, key)
   return best
 end
 
--- План раскладки: дорожки верхнего уровня (не папки, есть items, название узнаётся) -> в какую папку идут.
--- -> список групп { key = "DRUMS/KICK", label, tracks = { узлы }, new_top = bool, new_sub = bool, top = "DRUMS", sub = "KICK" или nil }
+-- План раскладки: дорожки верхнего уровня (не папки, есть items, название узнаётся) -> в какую папку идут (до трёх уровней: DRUMS > CYMBALS > OH).
+-- Папка нужной категории берётся существующая (любой глубины), иначе создаётся - когда в ней будет не меньше FOLDER_MIN_TRACKS дорожек;
+-- если папка не набирает дорожек, дорожка кладётся на уровень выше.
+-- -> список групп { key = "DRUMS/CYMBALS/OH", label, tracks = { узлы }, top, sub, sub2, new_top, new_sub, new_sub2 }
 local function plan_sort(root)
   local cands = {}
   for _, node in ipairs(root.children) do
@@ -260,44 +275,54 @@ local function plan_sort(root)
       if path then cands[#cands + 1] = { node = node, path = path } end
     end
   end
-  local top_n, sub_n = {}, {}
+  local count = {}
   for _, c in ipairs(cands) do
-    top_n[c.path[1]] = (top_n[c.path[1]] or 0) + 1
-    if c.path[2] then
-      local k = c.path[1] .. "/" .. c.path[2]
-      sub_n[k] = (sub_n[k] or 0) + 1
+    local key = ""
+    for i, name in ipairs(c.path) do
+      key = key .. (i > 1 and "/" or "") .. name
+      count[key] = (count[key] or 0) + 1
     end
   end
   local groups, by_key = {}, {}
   for _, c in ipairs(cands) do
-    local top, sub = c.path[1], c.path[2]
+    local top, sub, sub2 = c.path[1], c.path[2], c.path[3]
     local top_node = find_folder(root, top)
     local new_top = false
+    local ok = true
     if not top_node then
-      if top_n[top] >= FOLDER_MIN_TRACKS then new_top = true else top_node = false end
+      if count[top] >= FOLDER_MIN_TRACKS then new_top = true else ok = false end
     end
-    if top_node ~= false then
-      local sub_name, new_sub = nil, false
+    if ok then
+      local sub_name, new_sub, sub2_name, new_sub2 = nil, false, nil, false
+      local sub_node
       if sub then
-        local sub_node = top_node and find_folder(top_node, sub)
+        sub_node = top_node and find_folder(top_node, sub)
         if sub_node then sub_name = sub
-        elseif sub_n[top .. "/" .. sub] >= FOLDER_MIN_TRACKS then sub_name, new_sub = sub, true end
+        elseif count[top .. "/" .. sub] >= FOLDER_MIN_TRACKS then sub_name, new_sub = sub, true end
       end
-      local key = top .. (sub_name and ("/" .. sub_name) or "")
+      if sub_name and sub2 then
+        local sub2_node = sub_node and find_folder(sub_node, sub2)
+        if sub2_node then sub2_name = sub2
+        elseif count[top .. "/" .. sub .. "/" .. sub2] >= FOLDER_MIN_TRACKS then sub2_name, new_sub2 = sub2, true end
+      end
+      local key = top .. (sub_name and ("/" .. sub_name) or "") .. (sub2_name and ("/" .. sub2_name) or "")
       local g = by_key[key]
       if not g then
-        g = { key = key, top = top, sub = sub_name, new_top = new_top, new_sub = new_sub, tracks = {} }
-        g.label = top .. (sub_name and (" > " .. sub_name) or "")
+        g = { key = key, top = top, sub = sub_name, sub2 = sub2_name, new_top = new_top, new_sub = new_sub, new_sub2 = new_sub2, tracks = {} }
+        g.label = top .. (sub_name and (" > " .. sub_name) or "") .. (sub2_name and (" > " .. sub2_name) or "")
         by_key[key] = g
         groups[#groups + 1] = g
       end
       g.tracks[#g.tracks + 1] = c.node
     end
   end
+  -- порядок: папки верхнего уровня как в образце, внутри - KICK, SD, TOMS, CYMBALS; внутри CYMBALS - OH, ROOM, потом дорожки без своей папки
   table.sort(groups, function(a, b)
     local oa, ob = CANON_ORDER[a.top] or 99, CANON_ORDER[b.top] or 99
     if oa ~= ob then return oa < ob end
-    return (SUB_ORDER[a.sub or ""] or 0) < (SUB_ORDER[b.sub or ""] or 0)
+    local sa, sb = SUB_ORDER[a.sub or ""] or 0, SUB_ORDER[b.sub or ""] or 0
+    if sa ~= sb then return sa < sb end
+    return (SUB2_ORDER[a.sub2 or ""] or 9) < (SUB2_ORDER[b.sub2 or ""] or 9)
   end)
   return groups
 end
@@ -305,7 +330,6 @@ end
 -- Применить выбранные группы к дереву (дорожки переезжают в папки; новые папки - узлы без ref). -> число перенесённых дорожек, список новых узлов
 local function apply_sort(root, groups)
   local moved, created = 0, {}
-  local made = {}
   local function remove_from_root(node)
     for i, ch in ipairs(root.children) do if ch == node then table.remove(root.children, i); return i end end
   end
@@ -318,17 +342,13 @@ local function apply_sort(root, groups)
       end
     end
   end
-  local new_tops = {}
+  local new_tops, made = {}, {}
   for _, g in ipairs(groups) do if g.new_top and not made[g.top] then made[g.top] = true; new_tops[#new_tops + 1] = g.top end end
   table.sort(new_tops, function(a, b) return (CANON_ORDER[a] or 99) < (CANON_ORDER[b] or 99) end)
-  local top_nodes = {}
-  for _, g in ipairs(groups) do
-    top_nodes[g.top] = top_nodes[g.top] or (not g.new_top and find_folder(root, g.top)) or nil
-  end
   -- сначала вынимаем переносимые дорожки из корня, потом создаём папки (индексы не сбиваются)
   for _, g in ipairs(groups) do for _, node in ipairs(g.tracks) do remove_from_root(node) end end
-  local ins = insert_at or (#root.children + 1)
-  ins = math.min(ins, #root.children + 1)
+  local ins = math.min(insert_at or (#root.children + 1), #root.children + 1)
+  local top_nodes = {}
   for _, name in ipairs(new_tops) do
     local node = { name = name, items = 0, fd0 = 1, children = {}, new = true }
     table.insert(root.children, ins, node)
@@ -336,18 +356,20 @@ local function apply_sort(root, groups)
     top_nodes[name] = node
     created[#created + 1] = node
   end
-  for _, g in ipairs(groups) do
-    local top_node = top_nodes[g.top] or find_folder(root, g.top)
-    local container = top_node
-    if g.sub then
-      local sub_node = top_node and find_folder(top_node, g.sub)
-      if not sub_node then
-        sub_node = { name = g.sub, items = 0, fd0 = 1, children = {}, new = true }
-        top_node.children[#top_node.children + 1] = sub_node
-        created[#created + 1] = sub_node
-      end
-      container = sub_node
+  -- папка внутри parent: существующая (в том числе созданная выше в этом же проходе) или новая в конце parent
+  local function ensure_child(parent, key)
+    local node = find_folder(parent, key)
+    if not node then
+      node = { name = key, items = 0, fd0 = 1, children = {}, new = true }
+      parent.children[#parent.children + 1] = node
+      created[#created + 1] = node
     end
+    return node
+  end
+  for _, g in ipairs(groups) do
+    local container = top_nodes[g.top] or find_folder(root, g.top)
+    if g.sub then container = ensure_child(container, g.sub) end
+    if g.sub2 then container = ensure_child(container, g.sub2) end
     for _, node in ipairs(g.tracks) do
       container.children[#container.children + 1] = node
       moved = moved + 1
@@ -370,12 +392,31 @@ local function pick_keeper(group)
 end
 
 ----------------------------------------------------------------------
+-- Загрузка папки: какие файлы брать и в каком порядке (чистые функции)
+----------------------------------------------------------------------
+local function is_audio_file(name)
+  local ext = name:match("%.([^./" .. string.char(92) .. "]+)$")
+  return ext ~= nil and AUDIO_EXT[ext:lower()] == true and name:sub(1, 2) ~= "._"
+end
+
+-- название дорожки из имени файла: без расширения
+local function base_name(path)
+  local n = path:match("([^/" .. string.char(92) .. "]+)$") or path
+  return (n:gsub("%.[^.]*$", ""))
+end
+
+-- ключ «естественного» порядка: числа сравниваются как числа (2 раньше 10), регистр не важен
+local function natural_key(path)
+  return (path:lower():gsub("%d+", function(d) return string.rep("0", math.max(0, 12 - #d)) .. d end))
+end
+
+----------------------------------------------------------------------
 -- Библиотечный режим для тестов: отдать чистые функции и не запускать скрипт
 ----------------------------------------------------------------------
 if SSM_AUTO_PREPARE_LIBRARY then
   return { name_tokens = name_tokens, pan_side = pan_side, classify = classify, track_category = track_category, folder_matches = folder_matches,
     build_tree = build_tree, flatten_tree = flatten_tree, plan_sort = plan_sort, apply_sort = apply_sort, find_folder = find_folder,
-    pick_keeper = pick_keeper }
+    pick_keeper = pick_keeper, is_audio_file = is_audio_file, base_name = base_name, natural_key = natural_key }
 end
 
 ----------------------------------------------------------------------
@@ -591,6 +632,100 @@ local function find_duplicates(buckets, hashes)
   end
   table.sort(result, function(a, b) return a.drop.track_index < b.drop.track_index end)
   return result
+end
+
+----------------------------------------------------------------------
+-- Загрузка файлов из папки в проект
+----------------------------------------------------------------------
+-- Папка через диалог ОС (js_ReaScriptAPI) или ввод пути вручную. -> путь или nil
+local function choose_folder()
+  local last = reaper.GetExtState(EXT_SECTION, "last_dir")
+  local dir
+  if reaper.JS_Dialog_BrowseForFolder then
+    local rv, folder = reaper.JS_Dialog_BrowseForFolder("Папка с аудиофайлами для проекта", last or "")
+    if rv == 1 and folder and folder ~= "" then dir = folder end
+  else
+    local ok, val = reaper.GetUserInputs("Папка с аудиофайлами", 1, "Путь к папке,extrawidth=420", last or "")
+    if ok and val and val:match("%S") then dir = (val:gsub("^%s+", ""):gsub("%s+$", "")) end
+  end
+  if dir then reaper.SetExtState(EXT_SECTION, "last_dir", dir, true) end
+  return dir
+end
+
+-- Аудиофайлы папки (с вложенными, если включено) в естественном порядке имён. -> список путей
+local function scan_audio_files(dir)
+  local sep = dir:find(string.char(92), 1, true) and string.char(92) or "/"
+  local found = {}
+  local function walk(d, depth)
+    reaper.EnumerateFiles(d, -1) -- сбросить кэш каталога
+    reaper.EnumerateSubdirectories(d, -1)
+    local i = 0
+    while true do
+      local fn = reaper.EnumerateFiles(d, i)
+      if not fn then break end
+      i = i + 1
+      if is_audio_file(fn) then found[#found + 1] = d:gsub("[/" .. string.char(92) .. "]+$", "") .. sep .. fn end
+    end
+    if IMPORT_SUBFOLDERS and depth < IMPORT_DEPTH then
+      local j = 0
+      while true do
+        local sn = reaper.EnumerateSubdirectories(d, j)
+        if not sn then break end
+        j = j + 1
+        local low = sn:lower()
+        if sn:sub(1, 1) ~= "." and low ~= "backups" and low ~= "peaks" then walk(d:gsub("[/" .. string.char(92) .. "]+$", "") .. sep .. sn, depth + 1) end
+      end
+    end
+  end
+  walk(dir, 0)
+  table.sort(found, function(a, b) return natural_key(a) < natural_key(b) end)
+  return found
+end
+
+-- Загрузка: по дорожке на файл в конце проекта, айтем с нуля; уже загруженные файлы пропускаются. Свой шаг Undo. -> загружено, пропущено (уже есть), не удалось
+local function import_files(paths)
+  local have = {}
+  for ti = 0, reaper.CountTracks(0) - 1 do
+    local tr = reaper.GetTrack(0, ti)
+    for ii = 0, reaper.CountTrackMediaItems(tr) - 1 do
+      local take = reaper.GetActiveTake(reaper.GetTrackMediaItem(tr, ii))
+      if take and not reaper.TakeIsMIDI(take) then
+        local pth = source_path(root_source(take))
+        if pth then have[pth:lower()] = true end
+      end
+    end
+  end
+  local n_new, n_have, n_fail = 0, 0, 0
+  reaper.Undo_BeginBlock()
+  reaper.PreventUIRefresh(1)
+  for _, path in ipairs(paths) do
+    if have[path:lower()] then
+      n_have = n_have + 1
+    else
+      local src = reaper.PCM_Source_CreateFromFile(path)
+      local len = src and (reaper.GetMediaSourceLength(src)) or 0
+      if src and len and len > 0 then
+        local idx = reaper.CountTracks(0)
+        reaper.InsertTrackAtIndex(idx, true)
+        local tr = reaper.GetTrack(0, idx)
+        local name = base_name(path)
+        reaper.GetSetMediaTrackInfo_String(tr, "P_NAME", name, true)
+        local item = reaper.AddMediaItemToTrack(tr)
+        local take = reaper.AddTakeToMediaItem(item)
+        reaper.SetMediaItemTake_Source(take, src)
+        reaper.SetMediaItemInfo_Value(item, "D_POSITION", 0)
+        reaper.SetMediaItemInfo_Value(item, "D_LENGTH", len)
+        reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", name, true)
+        n_new = n_new + 1
+      else
+        n_fail = n_fail + 1
+      end
+    end
+  end
+  reaper.PreventUIRefresh(-1)
+  reaper.UpdateArrange()
+  reaper.Undo_EndBlock("SSM: загрузка файлов из папки", -1)
+  return n_new, n_have, n_fail
 end
 
 ----------------------------------------------------------------------
@@ -1132,7 +1267,41 @@ local function tick()
   reaper.defer(tick)
 end
 
+-- Перед проверкой: предложить загрузить файлы из папки. -> false, если работу нужно прекратить
+local function maybe_import()
+  local empty = reaper.CountTracks(0) == 0
+  local ask
+  if empty then
+    ask = reaper.ShowMessageBox("В проекте нет дорожек.\n\nВыбрать папку с аудиофайлами и загрузить их в проект?\nПосле загрузки скрипт сам проверит дорожки (моно, панорама, дубликаты, папки).", TITLE, 4)
+    if ask ~= 6 then return false end
+  else
+    ask = reaper.ShowMessageBox("Загрузить в проект файлы из папки перед проверкой?\n\nДа - выбрать папку с аудиофайлами (они загрузятся новыми дорожками, потом всё будет проверено)\nНет - проверить только то, что уже в проекте\nОтмена - выйти",
+      TITLE, 3)
+    if ask == 2 then return false end
+    if ask ~= 6 then return true end
+  end
+  local dir = choose_folder()
+  if not dir then return not empty end
+  local files = scan_audio_files(dir)
+  if #files == 0 then
+    reaper.ShowMessageBox("В папке нет аудиофайлов:\n" .. dir, TITLE, 0)
+    return not empty
+  end
+  local sub = IMPORT_SUBFOLDERS and " (с вложенными папками)" or ""
+  if reaper.ShowMessageBox(string.format("Найдено аудиофайлов: %d%s\nПапка: %s\n\nЗагрузить их в проект новыми дорожками?", #files, sub, dir), TITLE, 4) ~= 6 then return not empty end
+  local n_new, n_have, n_fail = import_files(files)
+  local note = string.format("Загружено файлов: %d.", n_new)
+  if n_have > 0 then note = note .. string.format(" Уже были в проекте: %d.", n_have) end
+  if n_fail > 0 then note = note .. string.format(" Не удалось открыть: %d.", n_fail) end
+  if n_new == 0 and reaper.CountTracks(0) == 0 then
+    reaper.ShowMessageBox(note, TITLE, 0)
+    return false
+  end
+  return true
+end
+
 local function main()
+  if not maybe_import() then return end
   if reaper.CountTracks(0) == 0 then
     reaper.ShowMessageBox("В проекте нет треков.", TITLE, 0)
     return
