@@ -318,6 +318,17 @@
       <metadata>
         <description>SSM_Auto_Prepare_Project</description>
       </metadata>
+      <version name="1.1" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.1 Окно согласия с галочками (на каждую функцию и на каждое изменение). Новое: поиск и удаление дубликатов айтемов (и пустых после этого дорожек),
+раскладка дорожек по папкам (DRUMS / KICK / SD / TOMS / CYMBALS, BASS, GTR, VOX, INST) по образцу ваших проектов.
+1.0 Релиз
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Auto_Prepare_Project.lua -->
+        <source main="main" file="../SSM_Auto_Prepare_Project.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Auto_Prepare_Project.lua</source>
+      </version>
       <version name="1.0" author="@ssm_metalmix">
 <changelog>
 <![CDATA[
