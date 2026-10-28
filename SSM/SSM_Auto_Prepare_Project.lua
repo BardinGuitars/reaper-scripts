@@ -1,5 +1,5 @@
 -- @description SSM_Auto_Prepare_Project
--- @version 1.2
+-- @version 1.3
 -- @author @ssm_metalmix
 -- @about
 --   🧹 Автоподготовка проекта: быстро наводит порядок в только что собранном проекте. Скрипт сначала анализирует проект,
@@ -15,12 +15,14 @@
 --   4) Раскладка дорожек по папкам: барабаны (бочка, малый, томы, тарелки; оверхеды и румы - каждые в своей папке внутри тарелок), бас, гитары, вокал, синты и клавиши - по названиям.
 --   Если подходящая папка в проекте уже есть, дорожка уходит в неё, иначе папка создаётся (когда в ней будет две дорожки и больше).
 --   Дорожки, которые уже лежат в папках, не трогаются.
---   5) Загрузка папки: при запуске скрипт предлагает выбрать папку с аудиофайлами (окно ОС), сам загружает файлы новыми дорожками и проверяет их по пунктам 1-4.
+--   5) Загрузка файлов: при запуске скрипт предлагает выбрать аудиофайлы в окне проводника (можно сразу много, Ctrl+A - все файлы папки), сам загружает их новыми дорожками и проверяет по пунктам 1-4.
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 --   ☕ Boosty - https://boosty.to/boostbg
 --   🌐 VK - https://vk.ru/ssm_metalmix
 -- @changelog
+--   1.3 Загрузка файлов: вместо выбора папки - окно проводника ОС со списком файлов (js_ReaScriptAPI): можно выделить сразу много файлов, Ctrl+A - все файлы папки.
+--   Выбран один файл - скрипт спрашивает, загрузить ли все аудиофайлы его папки. Без js_ReaScriptAPI - обычное окно REAPER «открыть файл» (любой файл из нужной папки).
 --   1.2 Загрузка папки: перед проверкой можно выбрать папку с аудиофайлами через окно ОС (нужен js_ReaScriptAPI, без него путь вводится вручную): файлы (и из вложенных
 --   папок) загружаются новыми дорожками, имя дорожки - имя файла, потом проверяются моно, панорама, дубликаты и раскладка по папкам. Загрузка - отдельный шаг Undo.
 --   1.2 Раскладка по папкам: внутри CYMBALS оверхеды (OH) и румы (ROOM) лежат каждые в своей папке: DRUMS > CYMBALS > OH, ROOM (хэт, райд, крэш - прямо в CYMBALS).
@@ -637,19 +639,43 @@ end
 ----------------------------------------------------------------------
 -- Загрузка файлов из папки в проект
 ----------------------------------------------------------------------
--- Папка через диалог ОС (js_ReaScriptAPI) или ввод пути вручную. -> путь или nil
-local function choose_folder()
+-- Папка файла
+local function dir_of(path)
+  local d = path:match("^(.*)[/" .. string.char(92) .. "]")
+  return d or ""
+end
+
+-- Окно проводника ОС со списком файлов: можно выделить сразу много (Ctrl+A - все файлы папки). Нужен js_ReaScriptAPI.
+-- Без него - обычное окно REAPER «открыть файл»: выбирается любой один файл из нужной папки. -> список путей (может быть один файл) или nil
+local function pick_files()
+  local NUL, BS = string.char(0), string.char(92)
   local last = reaper.GetExtState(EXT_SECTION, "last_dir")
-  local dir
-  if reaper.JS_Dialog_BrowseForFolder then
-    local rv, folder = reaper.JS_Dialog_BrowseForFolder("Папка с аудиофайлами для проекта", last or "")
-    if rv == 1 and folder and folder ~= "" then dir = folder end
+  local paths = {}
+  if reaper.JS_Dialog_BrowseForOpenFiles then
+    local filter = "Аудиофайлы" .. NUL .. "*.wav;*.wave;*.w64;*.aif;*.aiff;*.aifc;*.flac;*.mp3;*.ogg;*.opus;*.wv;*.caf;*.m4a" .. NUL
+      .. "Все файлы" .. NUL .. "*.*" .. NUL .. NUL
+    local rv, names = reaper.JS_Dialog_BrowseForOpenFiles("Выберите аудиофайлы (Ctrl+A - все файлы папки)", last or "", "", filter, true)
+    if rv ~= 1 or not names or names == "" then return nil end
+    local parts = {}
+    for piece in (names .. NUL):gmatch("([^" .. NUL .. "]*)" .. NUL) do
+      if piece ~= "" then parts[#parts + 1] = piece end
+    end
+    if #parts == 1 then
+      paths[1] = parts[1] -- выбран один файл: приходит полный путь
+    elseif #parts > 1 then
+      local dir = parts[1]:gsub("[/" .. BS .. "]+$", "")
+      local sep = dir:find(BS, 1, true) and BS or "/"
+      for i = 2, #parts do paths[#paths + 1] = dir .. sep .. parts[i] end
+    end
   else
-    local ok, val = reaper.GetUserInputs("Папка с аудиофайлами", 1, "Путь к папке,extrawidth=420", last or "")
-    if ok and val and val:match("%S") then dir = (val:gsub("^%s+", ""):gsub("%s+$", "")) end
+    local start = (last and last ~= "") and (last .. "/") or ""
+    local rv, file = reaper.GetUserFileNameForRead(start, "Выберите любой файл из нужной папки", "wav")
+    if not rv or not file or file == "" then return nil end
+    paths[1] = file
   end
-  if dir then reaper.SetExtState(EXT_SECTION, "last_dir", dir, true) end
-  return dir
+  if #paths == 0 then return nil end
+  reaper.SetExtState(EXT_SECTION, "last_dir", dir_of(paths[1]), true)
+  return paths
 end
 
 -- Аудиофайлы папки (с вложенными, если включено) в естественном порядке имён. -> список путей
@@ -1267,28 +1293,42 @@ local function tick()
   reaper.defer(tick)
 end
 
--- Перед проверкой: предложить загрузить файлы из папки. -> false, если работу нужно прекратить
+-- Перед проверкой: предложить загрузить файлы в проект (окно проводника ОС с выбором файлов). -> false, если работу нужно прекратить
 local function maybe_import()
   local empty = reaper.CountTracks(0) == 0
   local ask
   if empty then
-    ask = reaper.ShowMessageBox("В проекте нет дорожек.\n\nВыбрать папку с аудиофайлами и загрузить их в проект?\nПосле загрузки скрипт сам проверит дорожки (моно, панорама, дубликаты, папки).", TITLE, 4)
+    ask = reaper.ShowMessageBox("В проекте нет дорожек.\n\nВыбрать аудиофайлы и загрузить их в проект?\nОткроется окно проводника: можно выделить сразу много файлов (Ctrl+A - все файлы папки).\nПосле загрузки скрипт сам проверит дорожки (моно, панорама, дубликаты, папки).", TITLE, 4)
     if ask ~= 6 then return false end
   else
-    ask = reaper.ShowMessageBox("Загрузить в проект файлы из папки перед проверкой?\n\nДа - выбрать папку с аудиофайлами (они загрузятся новыми дорожками, потом всё будет проверено)\nНет - проверить только то, что уже в проекте\nОтмена - выйти",
+    ask = reaper.ShowMessageBox("Загрузить в проект файлы перед проверкой?\n\nДа - выбрать аудиофайлы в окне проводника (можно сразу много: Ctrl+A - все файлы папки); они загрузятся новыми дорожками, потом всё будет проверено\nНет - проверить только то, что уже в проекте\nОтмена - выйти",
       TITLE, 3)
     if ask == 2 then return false end
     if ask ~= 6 then return true end
   end
-  local dir = choose_folder()
-  if not dir then return not empty end
-  local files = scan_audio_files(dir)
+  local paths = pick_files()
+  if not paths then return not empty end
+  local files = {}
+  for _, pth in ipairs(paths) do if is_audio_file(pth:match("([^/" .. string.char(92) .. "]+)$") or pth) then files[#files + 1] = pth end end
   if #files == 0 then
-    reaper.ShowMessageBox("В папке нет аудиофайлов:\n" .. dir, TITLE, 0)
+    reaper.ShowMessageBox("Среди выбранных файлов нет аудио:\n" .. paths[1], TITLE, 0)
     return not empty
   end
-  local sub = IMPORT_SUBFOLDERS and " (с вложенными папками)" or ""
-  if reaper.ShowMessageBox(string.format("Найдено аудиофайлов: %d%s\nПапка: %s\n\nЗагрузить их в проект новыми дорожками?", #files, sub, dir), TITLE, 4) ~= 6 then return not empty end
+  -- выбран один файл: можно взять все аудиофайлы его папки
+  local scope = ""
+  if #files == 1 then
+    local dir = dir_of(files[1])
+    local all = dir ~= "" and scan_audio_files(dir) or {}
+    if #all > 1 then
+      local a2 = reaper.ShowMessageBox(string.format("Выбран один файл: %s\n\nДа - загрузить все аудиофайлы из этой папки (%d%s)\nНет - загрузить только этот файл\nОтмена - выйти",
+        files[1]:match("([^/" .. string.char(92) .. "]+)$") or files[1], #all, IMPORT_SUBFOLDERS and ", с вложенными папками" or ""), TITLE, 3)
+      if a2 == 2 then return not empty end
+      if a2 == 6 then files, scope = all, " из папки" end
+    end
+  else
+    table.sort(files, function(a, b) return natural_key(a) < natural_key(b) end)
+  end
+  if reaper.ShowMessageBox(string.format("Аудиофайлов к загрузке: %d%s\n%s\n\nЗагрузить их в проект новыми дорожками?", #files, scope, dir_of(files[1])), TITLE, 4) ~= 6 then return not empty end
   local n_new, n_have, n_fail = import_files(files)
   local note = string.format("Загружено файлов: %d.", n_new)
   if n_have > 0 then note = note .. string.format(" Уже были в проекте: %d.", n_have) end
