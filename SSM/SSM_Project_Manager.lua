@@ -1,5 +1,5 @@
 -- @description SSM_Project_Manager
--- @version 3.6
+-- @version 3.6.1
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
@@ -58,6 +58,7 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.6.1 Ползунок списка дорожек в правой панели перетаскивается мышью (клик по дорожке переносит его), а не только листается колесом.
 --   3.6 Справа - панель проекта (вместо карточки под списком): название, путь, темп / размер / частота / длина, список дорожек с номерами (с вложенностью папок, колесо мыши листает),
 --   плагины, заметка и кнопки «Открыть», «Новая вкладка», «В избранное», «Заметка (F2)», «Папка». Список проектов стал выше.
 --   3.5 Новый интерфейс: тёмная тема, боковая панель слева (источники «Все проекты», «Избранное», «Недавние», «Папки» со счётчиками; фильтры: переключатель «Только не найденные»,
@@ -374,6 +375,7 @@ local items = {}
 local view = {} -- то, что видно в списке: items после сортировки, поиска и фильтров
 local scroll = 0
 local rp_scroll, rp_cursor = 0, nil -- прокрутка списка дорожек в правой панели и проект, для которого она сделана
+local rp_drag = nil                 -- пока тащат ползунок списка дорожек: смещение мыши от его верха
 
 local function index_of(it)
   for i, v in ipairs(view) do if v == it then return i end end
@@ -1981,6 +1983,29 @@ local function draw()
         local rows = math.max(0, math.floor((G.rp_tr_y1 - G.rp_tr_y0) / G.rp_row_h))
         local max_sc = math.max(0, (#names - rows) * G.rp_row_h)
         rp_scroll = math.max(0, math.min(rp_scroll, max_sc))
+        -- ползунок: тащится мышью, клик по дорожке переносит его туда (и сразу можно тащить дальше)
+        local track_h = G.rp_tr_y1 - G.rp_tr_y0
+        local th = math.max(18, track_h * rows / math.max(1, #names))
+        local travel = math.max(1, track_h - th)
+        local thumb_y = G.rp_tr_y0 + travel * (max_sc > 0 and rp_scroll / max_sc or 0)
+        if max_sc > 0 and rows > 0 then
+          if rp_drag then
+            if (gfx.mouse_cap & 1) == 1 then
+              thumb_y = math.max(G.rp_tr_y0, math.min(gfx.mouse_y - rp_drag, G.rp_tr_y0 + travel))
+              rp_scroll = (thumb_y - G.rp_tr_y0) / travel * max_sc
+            else
+              rp_drag = nil
+            end
+          elseif lclick and gfx.mouse_x >= px + pw - 14 and gfx.mouse_x < px + pw + 6 and gfx.mouse_y >= G.rp_tr_y0 and gfx.mouse_y < G.rp_tr_y1 then
+            if gfx.mouse_y < thumb_y or gfx.mouse_y > thumb_y + th then
+              thumb_y = math.max(G.rp_tr_y0, math.min(gfx.mouse_y - th / 2, G.rp_tr_y0 + travel))
+              rp_scroll = (thumb_y - G.rp_tr_y0) / travel * max_sc
+            end
+            rp_drag = gfx.mouse_y - thumb_y
+          end
+        else
+          rp_drag = nil
+        end
         local first = math.floor(rp_scroll / G.rp_row_h + 0.5)
         for k = 1, rows do
           local idx = first + k
@@ -1994,9 +2019,8 @@ local function draw()
           draw_text(clip_head(shown, pw - 44 - indent), px + 36 + indent, ry + 3, tr.name ~= "" and col.text or col.dim)
         end
         if #names > rows and rows > 0 then -- ползунок прокрутки
-          local track_h = G.rp_tr_y1 - G.rp_tr_y0
-          local th = math.max(18, track_h * rows / #names)
-          rrect(px + pw - 4, G.rp_tr_y0 + (track_h - th) * (rp_scroll / max_sc), 4, th, 2, col.border)
+          local hot = rp_drag ~= nil or mouse_in(px + pw - 14, thumb_y, 20, th)
+          rrect(px + pw - 6, thumb_y, 6, th, 3, rp_drag and col.accent or (hot and col.dim or col.border))
         end
 
         -- плагины: число и названия (до трёх строк)
