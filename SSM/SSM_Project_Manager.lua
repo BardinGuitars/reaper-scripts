@@ -1,5 +1,5 @@
 -- @description SSM_Project_Manager
--- @version 3.6.1
+-- @version 3.7
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
@@ -58,6 +58,8 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.7 В «Настройках» (окно «Папки») галочки колонок списка: Имя, Путь, Дата, Размер. Выключенная колонка не рисуется, остаток строки забирает «Путь», а если он скрыт - «Имя»;
+--   выбор запоминается. Хотя бы одна из колонок «Имя» и «Путь» остаётся всегда.
 --   3.6.1 Ползунок списка дорожек в правой панели перетаскивается мышью (клик по дорожке переносит его), а не только листается колесом.
 --   3.6 Справа - панель проекта (вместо карточки под списком): название, путь, темп / размер / частота / длина, список дорожек с номерами (с вложенностью папок, колесо мыши листает),
 --   плагины, заметка и кнопки «Открыть», «Новая вкладка», «В избранное», «Заметка (F2)», «Папка». Список проектов стал выше.
@@ -1099,33 +1101,65 @@ local function reset_cols()
   save_cols()
 end
 
--- Положение колонок для окна шириной w. Без js_ReaScriptAPI даты нет - колонка
--- «Дата» скрыта. В узком окне имя/дата/размер временно ужимаются, путь не меньше минимума.
+-- Какие колонки показаны (галочки в «Настройках»); хранятся в настройках REAPER. Дата без js_ReaScriptAPI не показывается в любом случае.
+local COL_SHOW_KEYS = { "name", "path", "date", "size" }
+local col_show = {}
+for _, k in ipairs(COL_SHOW_KEYS) do col_show[k] = reaper.GetExtState(EXT_SECTION, "col_show_" .. k) ~= "0" end
+if not col_show.name and not col_show.path then col_show.name = true end -- хотя бы одна из «Имя» и «Путь» должна остаться
+
+-- Включить или выключить колонку. -> false, если выключить нельзя (последняя из «Имя» и «Путь»)
+local function toggle_col(k)
+  if col_show[k] and ((k == "name" and not col_show.path) or (k == "path" and not col_show.name)) then return false end
+  col_show[k] = not col_show[k]
+  reaper.SetExtState(EXT_SECTION, "col_show_" .. k, col_show[k] and "1" or "0", true)
+  return true
+end
+
+-- Положение колонок для окна шириной w. Остаток строки забирает «Путь», а если он скрыт - «Имя». Без js_ReaScriptAPI даты нет - колонка
+-- «Дата» скрыта. В узком окне имя/дата/размер временно ужимаются, колонка-остаток не меньше минимума.
 local function layout(x0, w)
   local right = x0 + w - 26 -- справа остаётся место под полосу прокрутки
-  local avail = right - (x0 + TEXT_X)
-  local nw, dw, sw = col_w.name, has_dates and col_w.date or 0, col_w.size
+  local start = x0 + TEXT_X
+  local avail = right - start
+  local sh = {
+    name = col_show.name or not col_show.path, path = col_show.path, date = col_show.date and has_dates, size = col_show.size,
+  }
+  local flex = sh.path and "path" or "name"
+  local nw = (sh.name and flex ~= "name") and col_w.name or 0
+  local dw = sh.date and col_w.date or 0
+  local sw = sh.size and col_w.size or 0
   local fixed = nw + dw + sw
-  if avail - fixed < COL_MIN.path then
+  if fixed > 0 and avail - fixed < COL_MIN.path then
     local k = math.max(0.3, (avail - COL_MIN.path) / fixed)
     nw, dw, sw = nw * k, dw * k, sw * k
     fixed = nw + dw + sw
   end
-  local pw = avail - fixed
-  local L = { right = right, name_x = x0 + TEXT_X, name_w = nw, path_x = x0 + TEXT_X + nw, path_w = pw }
-  L.date_x, L.date_w = L.path_x + pw, dw
-  L.size_x, L.size_w = L.date_x + dw, sw
+  local fw = avail - fixed
+  local L = { right = right, flex = flex, flex_w = fw, show = sh }
+  local x = start
+  L.name_x, L.name_w = x, sh.name and ((flex == "name") and fw or nw) or 0
+  x = x + L.name_w
+  L.path_x, L.path_w = x, sh.path and fw or 0
+  x = x + L.path_w
+  L.date_x, L.date_w = x, dw
+  x = x + dw
+  L.size_x, L.size_w = x, sw
+  L.flex_end = (flex == "path") and (L.path_x + L.path_w) or (L.name_x + L.name_w) -- правый край колонки-остатка (там плашка заметки)
   return L
 end
 
--- Разделители заголовка: какой ширине что соответствует
+-- Разделители заголовка между соседними показанными колонками: какой ширине что соответствует
 local function dividers(L)
-  local d = { { x = L.path_x, kind = "name" } }             -- имя | путь: меняет имя
-  if has_dates then
-    d[#d + 1] = { x = L.date_x, kind = "date_l" }           -- путь | дата: меняет дату
-    d[#d + 1] = { x = L.size_x, kind = "date_size" }        -- дата | размер: дата <-> размер
-  else
-    d[#d + 1] = { x = L.size_x, kind = "size_l" }           -- путь | размер: меняет размер
+  local d = {}
+  local order = {}
+  for _, k in ipairs(COL_SHOW_KEYS) do if L.show[k] then order[#order + 1] = k end end
+  for i = 2, #order do
+    local left, right = order[i - 1], order[i]
+    local kind
+    if left == L.flex then kind = (right == "date") and "date_l" or "size_l" -- слева остаток: двигаем ширину правой колонки
+    elseif right == L.flex then kind = "name"                                -- справа остаток: двигаем ширину имени
+    else kind = "date_size" end                                              -- дата | размер: ширина переходит от одной к другой
+    d[#d + 1] = { x = L[right .. "_x"], kind = kind }
   end
   return d
 end
@@ -1516,6 +1550,7 @@ local function geometry(w, h)
   g.fil_dd_step, g.fil_dd_h = 40, 32
   -- подвал
   g.by, g.bh, g.gap = g.foot_y + 54, 48, 10
+  g.col_opt_y, g.col_opt_step = g.foot_y - 128, 150 -- окно «Папки»: ряд галочек «Колонки списка»; шаг по x
   g.tab_w = g.rp_w - 2 * g.rp_pad
   return g
 end
@@ -1572,9 +1607,11 @@ local function draw()
           last_div_click_t = -1e9
         else
           last_div_click_t = now
-          col_w.name, col_w.date, col_w.size = L.name_w, has_dates and L.date_w or col_w.date, L.size_w
+          if L.show.name and L.flex ~= "name" then col_w.name = L.name_w end
+          if L.show.date then col_w.date = L.date_w end
+          if L.show.size then col_w.size = L.size_w end
           col_drag = { kind = dv.kind, x0 = gfx.mouse_x,
-            start = { name = col_w.name, date = col_w.date, size = col_w.size, path = L.path_w } }
+            start = { name = col_w.name, date = col_w.date, size = col_w.size, path = L.flex_w } }
         end
         break
       end
@@ -1664,27 +1701,34 @@ local function draw()
       local small_y = ry + (ROW_H - F_SMALL) / 2
       local text_y = ry + (ROW_H - F_ROW) / 2 - 1
       gfx.setfont(1, "Arial", F_ROW)
-      draw_text(clip_head(it.title, L.name_w - 12), L.name_x + 4, text_y, it.exists and col.text or col.dim)
 
-      -- пометка - плашка у правого края колонки пути
+      -- пометка - плашка у правого края колонки-остатка («Путь», а если он скрыт - «Имя»)
       local note_tag_w = 0
       if it.note ~= "" then
         gfx.setfont(1, "Arial", F_SMALL)
-        local shown = clip_head(it.note, math.min(200, L.path_w * 0.4))
+        local shown = clip_head(it.note, math.min(200, L.flex_w * 0.4))
         local tw = gfx.measurestr(shown)
         note_tag_w = tw + 24
-        local tx = L.date_x - note_tag_w
+        local tx = L.flex_end - note_tag_w
         rrect(tx, ry + (ROW_H - 22) / 2, tw + 16, 22, 5, col.tag_bg)
         draw_text(shown, tx + 8, small_y, col.tag)
         gfx.setfont(1, "Arial", F_ROW)
       end
-      draw_text(clip_tail(it.path, L.path_w - 12 - note_tag_w), L.path_x + 4, text_y, col.dim)
+      if L.show.name then
+        local tagw = (L.flex == "name") and note_tag_w or 0
+        draw_text(clip_head(it.title, L.name_w - 12 - tagw), L.name_x + 4, text_y, it.exists and col.text or col.dim)
+      end
+      if L.show.path then
+        draw_text(clip_tail(it.path, L.path_w - 12 - note_tag_w), L.path_x + 4, text_y, col.dim)
+      end
 
       gfx.setfont(1, "Arial", F_SMALL)
       if it.exists then
-        if has_dates then draw_text(fmt_date(it.mtime), L.date_x + 4, small_y, col.dim) end
-        local sz = fmt_size(it.size)
-        draw_text(sz, L.right - 2 - gfx.measurestr(sz), small_y, col.dim)
+        if L.show.date then draw_text(fmt_date(it.mtime), L.date_x + 4, small_y, col.dim) end
+        if L.show.size then
+          local sz = fmt_size(it.size)
+          draw_text(sz, L.right - 2 - gfx.measurestr(sz), small_y, col.dim)
+        end
       else
         local tag = "не найден"
         draw_text(tag, L.right - 2 - gfx.measurestr(tag), small_y, col.danger)
@@ -1922,13 +1966,15 @@ local function draw()
     end
     gfx.setfont(1, "Arial", F_SMALL)
     local hy = G.cols_y + (COLS_H - F_SMALL) / 2 - 1
-    draw_text("Имя", L.name_x + 4, hy, col.dim)
-    if sort_key == "name" then
-      icon(sort_desc and "tri_down" or "tri_up", L.name_x + 4 + gfx.measurestr("Имя") + 14, G.cols_y + COLS_H / 2, 14, col.accent_text)
+    if L.show.name then
+      draw_text("Имя", L.name_x + 4, hy, col.dim)
+      if sort_key == "name" then
+        icon(sort_desc and "tri_down" or "tri_up", L.name_x + 4 + gfx.measurestr("Имя") + 14, G.cols_y + COLS_H / 2, 14, col.accent_text)
+      end
     end
-    draw_text("Путь", L.path_x + 4, hy, col.dim)
-    if has_dates then draw_text("Дата", L.date_x + 4, hy, col.dim) end
-    draw_text("Размер", L.right - 2 - gfx.measurestr("Размер"), hy, col.dim)
+    if L.show.path then draw_text("Путь", L.path_x + 4, hy, col.dim) end
+    if L.show.date then draw_text("Дата", L.date_x + 4, hy, col.dim) end
+    if L.show.size then draw_text("Размер", L.right - 2 - gfx.measurestr("Размер"), hy, col.dim) end
     for _, dv in ipairs(divs) do
       local hot = (col_drag and col_drag.kind == dv.kind) or (not col_drag and mouse_in(dv.x - 4, G.cols_y, 9, COLS_H))
       set_color(hot and col.accent or col.border)
@@ -2082,7 +2128,7 @@ local function draw()
   end
 
   -- ===== окно «Папки»: закрывает список и панель проекта =====
-  local rm_dir, opt_click
+  local rm_dir, opt_click, col_click
   if show_settings then
     set_color(col.bg); gfx.rect(G.side_w, HEAD_H, w - G.side_w, foot_y - HEAD_H, 1)
     gfx.setfont(2, "Arial", F_TITLE, "b")
@@ -2095,11 +2141,25 @@ local function draw()
     end
     for i, d in ipairs(lib.dirs) do
       local ry = SET_ROW_Y0 + (i - 1) * SET_ROW_H
-      if ry + SET_ROW_H > foot_y - 100 then break end
+      if ry + SET_ROW_H > foot_y - 150 then break end
       if i % 2 == 0 then set_color(col.row_alt); gfx.rect(main_x, ry, main_w, SET_ROW_H, 1) end
       gfx.setfont(1, "Arial", F_ROW)
       draw_text(clip_tail(d, main_w - 32 - 110), main_x + 8, ry + (SET_ROW_H - F_ROW) / 2 - 1, col.text)
       if draw_button(main_x + main_w - 96, ry + 4, 90, 26, "Убрать", true, click, nil, F_SMALL) then rm_dir = i end
+    end
+    -- колонки списка проектов
+    gfx.setfont(1, "Arial", F_SMALL)
+    draw_text("Колонки списка проектов (хотя бы «Имя» или «Путь» остаётся):", main_x + 4, G.col_opt_y - 22, col.dim)
+    local col_labels = { name = "Имя", path = "Путь", date = "Дата", size = "Размер" }
+    for i, k in ipairs(COL_SHOW_KEYS) do
+      local cx = main_x + 4 + (i - 1) * G.col_opt_step
+      local on = col_show[k]
+      draw_checkbox(cx, G.col_opt_y + 4, on)
+      gfx.setfont(1, "Arial", F_ROW)
+      local label = col_labels[k]
+      if k == "date" and not has_js_stat then label = label .. " (нужен js_ReaScriptAPI)" end
+      draw_text(label, cx + CB + 8, G.col_opt_y + 5, (k == "date" and not has_js_stat) and col.dim or col.text)
+      if click and mouse_in(cx - 2, G.col_opt_y, math.min(G.col_opt_step - 6, 120), 28) then col_click = k end
     end
     local options = {
       { key = "skip_backups", y = foot_y - 84, label = "Пропускать папки Backups (копии и автосохранения REAPER)" },
@@ -2243,7 +2303,9 @@ local function draw()
     end
   end
 
-  if opt_click then
+  if col_click then
+    if not toggle_col(col_click) then status = "Нужна хотя бы одна из колонок «Имя» или «Путь»." end
+  elseif opt_click then
     lib[opt_click] = not lib[opt_click]
     lib.save_settings()
     status = "Настройка применится при следующем сканировании."
