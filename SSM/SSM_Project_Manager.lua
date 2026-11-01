@@ -1,5 +1,5 @@
 -- @description SSM_Project_Manager
--- @version 3.5
+-- @version 3.6
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
@@ -58,6 +58,8 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.6 Справа - панель проекта (вместо карточки под списком): название, путь, темп / размер / частота / длина, список дорожек с номерами (с вложенностью папок, колесо мыши листает),
+--   плагины, заметка и кнопки «Открыть», «Новая вкладка», «В избранное», «Заметка (F2)», «Папка». Список проектов стал выше.
 --   3.5 Новый интерфейс: тёмная тема, боковая панель слева (источники «Все проекты», «Избранное», «Недавние», «Папки» со счётчиками; фильтры: переключатель «Только не найденные»,
 --   меню «Возраст», «Размер», «Дата»), шапка с названием, поиском и кнопками «Избранное», «Недавние», «Настройки», ряд кнопок «Найденные / Все / Только не найденные / Возраст»,
 --   галочка выбора всех в заголовке колонок, галочки во всех списках (можно открывать несколько отмеченных проектов из «Всех проектов» и «Избранного»), панель проекта карточкой,
@@ -110,10 +112,10 @@ local function script_version()
   return ok and ver or nil
 end
 local TITLE = "SSM Project Manager" .. (script_version() and (" " .. script_version()) or "")
-local WIN_W, WIN_H = 1180, 820
-local MIN_W, MIN_H = 900, 640
+local WIN_W, WIN_H = 1300, 820
+local MIN_W, MIN_H = 1180, 640
 local SIDE_W = 236 -- боковая панель: источники и фильтры
-local HEAD_H, INFO_H, FOOT_H, ROW_H = 92, 104, 112, 36
+local HEAD_H, FOOT_H, ROW_H = 92, 112, 36
 local EXT_SECTION = "SSM_ProjectManager"
 local OLD_EXT_SECTION = "SSM_RecentCleanup" -- настройки прежнего названия скрипта
 local COLS_H = 32 -- строка заголовков колонок
@@ -371,6 +373,7 @@ end
 local items = {}
 local view = {} -- то, что видно в списке: items после сортировки, поиска и фильтров
 local scroll = 0
+local rp_scroll, rp_cursor = 0, nil -- прокрутка списка дорожек в правой панели и проект, для которого она сделана
 
 local function index_of(it)
   for i, v in ipairs(view) do if v == it then return i end end
@@ -871,10 +874,10 @@ local open_new_tab = reaper.GetExtState(EXT_SECTION, "open_new_tab") ~= "0"
 -- Новая вкладка (действие 40859): текущий проект не трогается; "noprompt:" - без вопроса
 -- о сохранении пустой вкладки. В текущей вкладке имя без "noprompt:" - REAPER сам
 -- спросит, сохранить ли несохранённые изменения, ничего не потеряется молча.
-local function open_project(it)
+local function open_project(it, force_tab)
   if not it or not it.exists then return end
   local name = it.path:match("([^\\/]+)$") or it.path
-  if open_new_tab then
+  if open_new_tab or force_tab then
     reaper.Main_OnCommand(40859, 0)
     reaper.Main_openProject("noprompt:" .. it.path)
     status = "Открыт в новой вкладке: " .. name
@@ -969,7 +972,8 @@ local function parse_rpp(path)
   local data = f:read("*a")
   f:close()
 
-  local info = { tracks = 0, fx = 0, fx_names = {} }
+  local info = { tracks = 0, fx = 0, fx_names = {}, names = {} }
+  local cur_track, run_level = nil, 0 -- текущая дорожка и уровень папки (ISBUS)
   local seen = {}
   local depth, item_depth = 0, nil
   local ipos, ilen, len_end = nil, nil, 0
@@ -982,6 +986,8 @@ local function parse_rpp(path)
         info.ver = t:match('"([%d%.]+)')
       elseif tag == "TRACK" and depth == 1 then
         info.tracks = info.tracks + 1
+        cur_track = { name = "", level = run_level, fd = 0 }
+        info.names[#info.names + 1] = cur_track
       elseif tag == "ITEM" then
         item_depth, ipos, ilen = depth, nil, nil
       elseif FX_TAGS[tag] then
@@ -995,6 +1001,10 @@ local function parse_rpp(path)
       depth = depth + 1
     elseif c == ">" then
       depth = depth - 1
+      if cur_track and depth == 1 then -- дорожка закончилась: уровень следующих меняет её ISBUS
+        run_level = math.max(0, run_level + cur_track.fd)
+        cur_track = nil
+      end
       if item_depth and depth == item_depth then
         if ipos and ilen and ipos + ilen > len_end then len_end = ipos + ilen end
         item_depth = nil
@@ -1009,7 +1019,13 @@ local function parse_rpp(path)
           local sr = t:match("^SAMPLERATE%s+(%d+)")
           if sr then info.sr = tonumber(sr) end
         end
-      elseif item_depth and depth == item_depth + 1 then
+      elseif cur_track and depth == 2 then
+        local nm = t:match('^NAME%s+"(.-)"') or t:match("^NAME%s+(%S.*)$")
+        if nm then cur_track.name = nm end
+        local fd = t:match("^ISBUS%s+%-?%d+%s+(%-?%d+)")
+        if fd then cur_track.fd = tonumber(fd) end
+      end
+      if item_depth and depth == item_depth + 1 then
         local v = t:match("^POSITION%s+(%S+)")
         if v then ipos = tonumber(v) end
         v = t:match("^LENGTH%s+(%S+)")
@@ -1191,7 +1207,7 @@ end
 
 local function page_rows()
   -- видимая высота списка: окно минус шапка, три строки управления, заголовки колонок, панель проекта и подвал
-  local list_h = gfx.h - (HEAD_H + 12 + 36 + 10 + 34 + 12 + COLS_H) - INFO_H - 6 - 6 - FOOT_H
+  local list_h = gfx.h - (HEAD_H + 12 + 36 + 10 + 34 + 12 + COLS_H) - 8 - FOOT_H
   return math.max(1, math.floor(list_h / ROW_H))
 end
 
@@ -1455,24 +1471,41 @@ local function geometry(w, h)
   local g = { w = w, h = h, pad = 14 }
   g.side_w = SIDE_W
   g.head_h = HEAD_H
+  g.rp_w = (w >= 1250) and 340 or 300 -- правая панель проекта
+  g.rp_x = w - g.rp_w
   g.main_x = SIDE_W + g.pad
-  g.main_w = w - g.main_x - g.pad
+  g.main_w = g.rp_x - g.pad - g.main_x
   g.foot_y = h - FOOT_H
-  g.info_y = g.foot_y - INFO_H - 6
   -- шапка: три кнопки справа и поле поиска между названием и ними
   g.hb_w = 86
   g.hb_x0 = w - 14 - 3 * g.hb_w
   g.search_x, g.search_y, g.search_h = SIDE_W + g.pad, 24, 44
   g.search_w = g.hb_x0 - 22 - g.search_x
-  -- основная область: сортировка, фильтры-кнопки, заголовки колонок, список, панель проекта
+  -- основная область: сортировка, фильтры-кнопки, заголовки колонок, список
   g.sort_y, g.sort_h = HEAD_H + 12, 36
   g.chip_y, g.chip_h = g.sort_y + g.sort_h + 10, 34
   g.cols_y = g.chip_y + g.chip_h + 12
   g.list_y = g.cols_y + COLS_H
-  g.list_h = math.max(60, g.info_y - g.list_y - 6)
-  g.text_w = g.main_w - BTN_W - 100                      -- ширина текста панели проекта
-  g.note_x, g.note_y = g.main_x + 78 + 64, g.info_y + 62 -- поле пометки
-  g.note_w, g.note_h = g.text_w - 78, 28
+  g.list_h = math.max(60, g.foot_y - g.list_y - 8)
+  -- правая панель сверху вниз: название, путь, сведения, дорожки, плагины, заметка, кнопки
+  g.rp_pad = 18
+  g.rp_top = HEAD_H + 18
+  g.rp_row_h = 22                                                -- строка списка дорожек
+  g.rp_btn_h, g.rp_btn_gap, g.rp_btn1_h = 32, 8, 38
+  g.rp_btn3_y = g.foot_y - 10 - g.rp_btn_h                       -- «Заметка», «Папка»
+  g.rp_btn2_y = g.rp_btn3_y - g.rp_btn_gap - g.rp_btn_h          -- «Новая вкладка», «В избранное»
+  g.rp_btn1_y = g.rp_btn2_y - g.rp_btn_gap - g.rp_btn1_h         -- «Открыть»
+  g.note_h = 30
+  g.note_x, g.note_w = g.rp_x + g.rp_pad, g.rp_w - 2 * g.rp_pad  -- поле заметки
+  g.note_y = g.rp_btn1_y - 12 - g.note_h
+  g.rp_note_label_y = g.note_y - 22
+  g.rp_tr_y0 = g.rp_top + 142                                    -- список дорожек
+  local pl_h = 66                                                -- плагины; в низком окне их не показываем, чтобы осталось место для дорожек
+  local tr_y1 = g.rp_note_label_y - 8 - pl_h - 8
+  if tr_y1 - g.rp_tr_y0 < 5 * g.rp_row_h then pl_h = 0; tr_y1 = g.rp_note_label_y - 8 end
+  g.rp_pl_h = pl_h
+  g.rp_pl_y = g.rp_note_label_y - 8 - pl_h
+  g.rp_tr_y1 = tr_y1
   -- боковая панель
   g.si_y0, g.si_h, g.si_step = HEAD_H + 14, 38, 40       -- источники: Все проекты, Избранное, Недавние, Папки
   g.fil_title_y = g.si_y0 + 4 * g.si_step + 14
@@ -1481,7 +1514,7 @@ local function geometry(w, h)
   g.fil_dd_step, g.fil_dd_h = 40, 32
   -- подвал
   g.by, g.bh, g.gap = g.foot_y + 54, 48, 10
-  g.tab_w = 270
+  g.tab_w = g.rp_w - 2 * g.rp_pad
   return g
 end
 
@@ -1508,7 +1541,7 @@ local function draw()
   local lclick = click and not show_settings -- клики по списку и панели проекта не проходят под окно «Папки»
   local main_x, main_w = G.main_x, G.main_w
   local list_y, list_h = G.list_y, G.list_h
-  local foot_y, info_y = G.foot_y, G.info_y
+  local foot_y = G.foot_y
   local gap = G.gap
   local side_click_y, chip_x -- где открывать выпадающие меню
 
@@ -1550,7 +1583,11 @@ local function draw()
   local max_scroll = math.max(0, total_h - list_h)
 
   if gfx.mouse_wheel ~= 0 then
-    scroll = scroll - (gfx.mouse_wheel / 120) * ROW_H * 3
+    if gfx.mouse_x >= G.rp_x and not show_settings then -- над правой панелью колесо листает список дорожек проекта
+      rp_scroll = rp_scroll - (gfx.mouse_wheel / 120) * G.rp_row_h * 3
+    else
+      scroll = scroll - (gfx.mouse_wheel / 120) * ROW_H * 3
+    end
     gfx.mouse_wheel = 0
   end
   if follow_cursor then -- курсор, сдвинутый с клавиатуры, не должен уходить за край списка
@@ -1897,41 +1934,100 @@ local function draw()
     end
   end
 
-  -- ===== панель проекта под курсором (карточка) =====
-  local act_fav, act_note, act_reveal
+  -- ===== правая панель: сведения о проекте под курсором =====
+  local act_fav, act_note, act_reveal, act_popen, act_ptab
   do
-    rrect(main_x, info_y, main_w, INFO_H, 10, col.card)
-    rframe(main_x, info_y, main_w, INFO_H, 10, col.border)
+    local px, pw = G.rp_x + G.rp_pad, G.rp_w - 2 * G.rp_pad
+    set_color(col.panel); gfx.rect(G.rp_x, HEAD_H, G.rp_w, foot_y - HEAD_H, 1)
+    set_color(col.border); gfx.rect(G.rp_x, HEAD_H, 1, foot_y - HEAD_H, 1)
     local it = cursor
+    if it ~= rp_cursor then rp_cursor, rp_scroll = it, 0 end
     if not it then
       gfx.setfont(1, "Arial", F_SMALL)
-      draw_text("Проект не выбран.", main_x + 18, info_y + 16, col.dim)
+      draw_text("Проект не выбран.", px, G.rp_top, col.dim)
     else
-      local tx = main_x + 64
-      rrect(main_x + 16, info_y + 14, 34, 42, 5, col.btn)
-      icon("doc", main_x + 33, info_y + 35, 26, col.accent_text)
-      gfx.setfont(1, "Arial", F_ROW + 2)
-      local name = it.path:match("([^\\/]+)$") or it.path
-      draw_text(clip_head(name, G.text_w), tx, info_y + 10, it.exists and col.text or col.danger)
+      gfx.setfont(2, "Arial", 20, "b")
+      draw_text(clip_head(it.title, pw), px, G.rp_top, it.exists and col.text or col.danger)
+      gfx.setfont(1, "Arial", 14)
+      draw_text(clip_tail(it.path, pw), px, G.rp_top + 30, col.dim)
+      set_color(col.border); gfx.rect(px, G.rp_top + 56, pw, 1, 1)
 
-      gfx.setfont(1, "Arial", F_SMALL)
-      local line
+      local y = G.rp_top + 70
+      local inf = it.exists and get_info(it) or nil
+      gfx.setfont(1, "Arial", F_SMALL + 1)
       if not it.exists then
-        line = "Файл не найден."
+        draw_text("Файл не найден.", px, y, col.danger)
+      elseif not inf then
+        draw_text("Читаю проект…", px, y, col.dim)
+      elseif inf.err then
+        draw_text(clip_head(inf.err, pw), px, y, col.dim)
       else
-        local inf = get_info(it)
-        if not inf then line = "Читаю проект…"
-        elseif inf.err then line = inf.err
-        else line = info_text(inf) end
-      end
-      draw_text(clip_head(line, G.text_w), tx, info_y + 38, col.dim)
+        -- темп, размер, частота, длина
+        local parts = {}
+        if inf.tempo then parts[#parts + 1] = string.format("%g BPM", inf.tempo) .. (inf.sig and (" · " .. inf.sig) or "") end
+        if inf.sr then parts[#parts + 1] = string.format("%g кГц", inf.sr / 1000) end
+        if inf.len then parts[#parts + 1] = fmt_len(inf.len) end
+        draw_text(clip_head(table.concat(parts, " · "), pw), px, y, col.text)
+        gfx.setfont(1, "Arial", 14)
+        local sub = {}
+        if inf.ver then sub[#sub + 1] = "REAPER " .. inf.ver end
+        if it.size then sub[#sub + 1] = fmt_size(it.size) end
+        if it.mtime then sub[#sub + 1] = fmt_date(it.mtime) end
+        draw_text(clip_head(table.concat(sub, " · "), pw), px, y + 26, col.dim)
 
-      -- пометка: поле ввода (клик или F2 - редактировать)
+        -- дорожки: номер, название (папки сдвигают вправо); колесо мыши над панелью листает
+        draw_text(string.format("ТРЕКОВ %d", inf.tracks), px, y + 56, col.dim)
+        local names = inf.names or {}
+        local rows = math.max(0, math.floor((G.rp_tr_y1 - G.rp_tr_y0) / G.rp_row_h))
+        local max_sc = math.max(0, (#names - rows) * G.rp_row_h)
+        rp_scroll = math.max(0, math.min(rp_scroll, max_sc))
+        local first = math.floor(rp_scroll / G.rp_row_h + 0.5)
+        for k = 1, rows do
+          local idx = first + k
+          local tr = names[idx]
+          if not tr then break end
+          local ry = G.rp_tr_y0 + (k - 1) * G.rp_row_h
+          local num = tostring(idx)
+          draw_text(num, px + 26 - gfx.measurestr(num), ry + 3, col.dim)
+          local shown = tr.name ~= "" and tr.name or ("Дорожка " .. idx)
+          local indent = math.min(tr.level, 6) * 10
+          draw_text(clip_head(shown, pw - 44 - indent), px + 36 + indent, ry + 3, tr.name ~= "" and col.text or col.dim)
+        end
+        if #names > rows and rows > 0 then -- ползунок прокрутки
+          local track_h = G.rp_tr_y1 - G.rp_tr_y0
+          local th = math.max(18, track_h * rows / #names)
+          rrect(px + pw - 4, G.rp_tr_y0 + (track_h - th) * (rp_scroll / max_sc), 4, th, 2, col.border)
+        end
+
+        -- плагины: число и названия (до трёх строк)
+        if G.rp_pl_h > 0 then
+          draw_text(inf.fx > 0 and string.format("ПЛАГИНЫ %d", inf.fx) or "Плагинов нет", px, G.rp_pl_y, col.dim)
+          if inf.fx > 0 then
+            local lines, cur = {}, ""
+            for _, nm in ipairs(inf.fx_names) do
+              local cand = cur == "" and nm or (cur .. ", " .. nm)
+              if cur ~= "" and gfx.measurestr(cand .. ",") > pw then
+                lines[#lines + 1] = cur .. ","
+                cur = nm
+              else
+                cur = cand
+              end
+            end
+            if cur ~= "" then lines[#lines + 1] = cur end
+            if #lines > 3 then lines = { lines[1], lines[2], lines[3] .. " …" } end
+            for i, ln in ipairs(lines) do draw_text(clip_head(ln, pw), px, G.rp_pl_y + 18 + (i - 1) * 16, col.text) end
+          end
+        end
+      end
+
+      -- заметка: поле ввода (клик или F2 - редактировать)
+      gfx.setfont(1, "Arial", 14)
+      draw_text("ЗАМЕТКА", px, G.rp_note_label_y, col.dim)
       local note_x, note_y, note_w, note_h = G.note_x, G.note_y, G.note_w, G.note_h
-      draw_text("Заметка:", tx, note_y + (note_h - F_SMALL) / 2 - 1, col.dim)
       local editing = edit and edit.it == it
       rrect(note_x, note_y, note_w, note_h, 6, col.bg)
       rframe(note_x, note_y, note_w, note_h, 6, editing and col.accent or col.border)
+      gfx.setfont(1, "Arial", F_SMALL)
       local ty = note_y + (note_h - F_SMALL) / 2 - 1
       if editing then
         local shown = clip_tail(edit.buf, note_w - 20)
@@ -1946,15 +2042,18 @@ local function draw()
         rrect(note_x + 6, note_y + 4, tw + 16, note_h - 8, 5, col.tag_bg)
         draw_text(shown, note_x + 14, ty, col.tag)
       else
-        draw_text(clip_head("нет - клик или F2, чтобы добавить (Enter - сохранить)", note_w - 24), note_x + 10, ty, col.dim)
+        draw_text(clip_head("клик или F2 - добавить (Enter - сохранить)", note_w - 24), note_x + 10, ty, col.dim)
       end
       if lclick and not edit and mouse_in(note_x, note_y, note_w, note_h) then start_edit() end
 
-      local bx = main_x + main_w - 16 - BTN_W
-      act_fav = draw_button(bx, info_y + 8, BTN_W, 26, it.fav and "Убрать из избранного" or "В избранное",
+      -- кнопки: «Открыть» (как задано галочкой), «Новая вкладка», «В избранное», «Заметка», «Папка»
+      local half = (pw - G.rp_btn_gap) / 2
+      act_popen = draw_button(px, G.rp_btn1_y, pw, G.rp_btn1_h, "Открыть", it.exists, lclick, col.accent, F_BTN, "play")
+      act_ptab = draw_button(px, G.rp_btn2_y, half, G.rp_btn_h, "Новая вкладка", it.exists, lclick, nil, F_SMALL)
+      act_fav = draw_button(px + half + G.rp_btn_gap, G.rp_btn2_y, half, G.rp_btn_h, it.fav and "Из избранного" or "В избранное",
         true, lclick, nil, F_SMALL, it.fav and "star" or "star_o")
-      act_note = draw_button(bx, info_y + 38, BTN_W, 26, "Пометка (F2)", true, lclick, nil, F_SMALL, "doc")
-      act_reveal = draw_button(bx, info_y + 68, BTN_W, 26, "Показать в папке", it.exists, lclick, nil, F_SMALL, "folder")
+      act_note = draw_button(px, G.rp_btn3_y, half, G.rp_btn_h, "Заметка (F2)", true, lclick, nil, F_SMALL, "doc")
+      act_reveal = draw_button(px + half + G.rp_btn_gap, G.rp_btn3_y, half, G.rp_btn_h, "Папка", it.exists, lclick, nil, F_SMALL, "folder")
     end
   end
 
@@ -1995,6 +2094,8 @@ local function draw()
   set_color(col.border); gfx.rect(0, foot_y, w, 1, 1)
   set_color(col.panel); gfx.rect(0, foot_y + 1, G.side_w, FOOT_H - 1, 1)
   set_color(col.border); gfx.rect(G.side_w - 1, foot_y, 1, FOOT_H, 1)
+  set_color(col.panel); gfx.rect(G.rp_x, foot_y + 1, G.rp_w, FOOT_H - 1, 1)
+  set_color(col.border); gfx.rect(G.rp_x, foot_y, 1, FOOT_H, 1)
 
   -- «Выбрано: N (размер)» под боковой панелью
   local n_checked = count_checked()
@@ -2008,7 +2109,7 @@ local function draw()
 
   -- галочка «Открывать в новой вкладке» - справа в строке статуса
   local tab_w = G.tab_w
-  local tx = main_x + main_w - tab_w
+  local tx = G.rp_x + 18
   if not show_settings then
     draw_checkbox(tx, foot_y + 10, open_new_tab)
     gfx.setfont(1, "Arial", F_SMALL)
@@ -2023,7 +2124,7 @@ local function draw()
 
   gfx.setfont(1, "Arial", F_SMALL)
   local status_text = status ~= "" and status or "Галочка - выбрать · двойной клик или Enter - открыть · F2 - пометка · Esc - очистить поиск"
-  draw_text((status ~= "" and clip_tail or clip_head)(status_text, main_w - (show_settings and 0 or tab_w + 12)), main_x, foot_y + 13, col.dim)
+  draw_text((status ~= "" and clip_tail or clip_head)(status_text, main_w), main_x, foot_y + 13, col.dim)
 
   local bh, by = G.bh, G.by
   local act_auto, act_open, act_del, act_undo, act_close, act_scan, act_add, act_back
@@ -2134,6 +2235,10 @@ local function draw()
     start_edit()
   elseif act_reveal then
     reveal_in_folder(cursor)
+  elseif act_popen then
+    open_project(cursor)
+  elseif act_ptab then
+    open_project(cursor, true)
   elseif act_add then
     lib.add_folder_dialog()
   elseif act_scan then
