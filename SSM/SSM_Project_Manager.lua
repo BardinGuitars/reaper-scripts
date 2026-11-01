@@ -1,14 +1,16 @@
 -- @description SSM_Project_Manager
--- @version 3.4
+-- @version 3.5
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
 --   папок - поиск, сортировка, избранное, пометки, быстрое открытие, чистка.
+--   Тёмный интерфейс с боковой панелью: слева источники и фильтры, справа сортировка, список и панель проекта.
 --
---   Источник списка (второй ряд кнопок)
+--   Источник списка (боковая панель или кнопки справа вверху)
 --     - «Недавние» - список Recent projects из reaper.ini (чистка, удаление);
+--     - «Избранное» - проекты со звездой из любых списков;
 --     - «Все проекты» - каталог файлов .rpp из папок, которые вы добавили
---       кнопкой «Папки». Список только для чтения: проекты можно искать,
+--       в «Папки». Список только для чтения: проекты можно искать,
 --       сортировать, помечать, открывать, но не удалять. Сначала папок нет -
 --       список пуст. В «Папки» - добавить/убрать папку, «Пересканировать»
 --       (по кнопке; результат запоминается в файле рядом с reaper.ini),
@@ -29,7 +31,7 @@
 --     - фильтры: «Только не найденные» и «Возраст» (старше 3 мес. ... 2 лет);
 --     - размер окна запоминается.
 --   Избранное и пометки
---     - ★ у проекта: избранные всегда сверху и защищены от массовых действий
+--     - ★ у проекта: избранные защищены от массовых действий
 --       («Отметить все», «Убрать пропавшие»); удаление отмеченного избранного
 --       - только после подтверждения;
 --     - пометка (F2 или клик по полю под списком): своя заметка или теги,
@@ -56,6 +58,11 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.5 Новый интерфейс: тёмная тема, боковая панель слева (источники «Все проекты», «Избранное», «Недавние», «Папки» со счётчиками; фильтры: переключатель «Только не найденные»,
+--   меню «Возраст», «Размер», «Дата»), шапка с названием, поиском и кнопками «Избранное», «Недавние», «Настройки», ряд кнопок «Найденные / Все / Только не найденные / Возраст»,
+--   галочка выбора всех в заголовке колонок, галочки во всех списках (можно открывать несколько отмеченных проектов из «Всех проектов» и «Избранного»), панель проекта карточкой,
+--   «Выбрано: N (размер)» в подвале. Новый источник «Избранное» - проекты со звездой из любых списков. Сортировка «Не найденные» заменена фильтром. Удаление записей - только в «Недавних».
+--   Избранные проекты больше не прижаты к верху списка: порядок один для всех (по выбранной сортировке); избранное видно по звезде и в источнике «Избранное».
 --   3.4 «Открыть отмеченные»: если отмечено два проекта и больше, кнопка «Открыть» открывает их все по очереди, каждый в новой вкладке REAPER
 --   (при пяти и больше - сначала вопрос). Идёт по одному за кадр, видно ход («Открываю 3 из 8»), кнопка «Остановить» или Esc прерывает.
 --   3.3 Номер версии в заголовке окна (видно, какая версия запущена).
@@ -103,37 +110,36 @@ local function script_version()
   return ok and ver or nil
 end
 local TITLE = "SSM Project Manager" .. (script_version() and (" " .. script_version()) or "")
-local WIN_W, WIN_H = 1000, 820
-local MIN_W, MIN_H = 720, 560
-local HEAD_H, INFO_H, FOOT_H, ROW_H = 192, 90, 116, 34
-local SEARCH_Y, SEARCH_H = 66, 34
-local SORT_Y, SORT_H = 110, 34
-local CHIP_Y, CHIP_H = 152, 30
+local WIN_W, WIN_H = 1180, 820
+local MIN_W, MIN_H = 900, 640
+local SIDE_W = 236 -- боковая панель: источники и фильтры
+local HEAD_H, INFO_H, FOOT_H, ROW_H = 92, 104, 112, 36
 local EXT_SECTION = "SSM_ProjectManager"
 local OLD_EXT_SECTION = "SSM_RecentCleanup" -- настройки прежнего названия скрипта
-local COLS_H = 26 -- строка заголовков колонок под шапкой
+local COLS_H = 32 -- строка заголовков колонок
 local COL_DEF = { name = 220, date = 100, size = 84 } -- стандартная ширина, пикселей
 local COL_MIN = { name = 60, path = 100, date = 70, size = 56 }
 local INDEX_NAME = "SSM_ProjectManager_index.txt" -- индекс «Всех проектов», рядом с reaper.ini
 local SCAN_BUDGET, SCAN_MAX_DEPTH = 0.02, 20      -- секунд на кадр; глубина вложенности папок
-local SET_ROW_Y0, SET_ROW_H = HEAD_H + 70, 34     -- окно «Папки»: первая строка и высота строки
-local F_ROW, F_TITLE, F_SMALL, F_BTN, F_SORT = 17, 20, 15, 17, 16
+local SET_ROW_Y0, SET_ROW_H = HEAD_H + 84, 36     -- окно «Папки»: первая строка и высота строки
+local F_ROW, F_TITLE, F_SMALL, F_BTN, F_SORT = 17, 22, 15, 17, 16
 local CB = 20 -- сторона чекбокса
-local STAR_X, STAR_W = 44, 22
-local TEXT_X = 74 -- начало пути в строке списка
+local STAR_X, STAR_W = 42, 22
+local TEXT_X = 72 -- начало имени в строке списка (от левого края списка)
 local BTN_W = 190 -- ширина кнопок панели проекта
-local NOTE_LABEL_W = 78
 local DOUBLE_CLICK = 0.4 -- секунд
 local INFO_MAX_BYTES = 40 * 1024 * 1024
 
 local ini_path = reaper.get_ini_file()
 
 local col = {
-  bg = { 0.13, 0.14, 0.16 }, panel = { 0.17, 0.18, 0.21 }, row_alt = { 0.15, 0.16, 0.19 },
-  text = { 0.92, 0.93, 0.95 }, dim = { 0.62, 0.65, 0.70 }, accent = { 0.30, 0.55, 0.95 },
-  border = { 0.36, 0.38, 0.44 }, danger = { 0.95, 0.42, 0.42 },
-  btn = { 0.24, 0.26, 0.31 }, btn_hover = { 0.31, 0.34, 0.40 }, btn_off = { 0.18, 0.19, 0.22 },
-  btn_danger = { 0.62, 0.24, 0.24 }, star = { 1.0, 0.80, 0.25 }, tag = { 0.55, 0.75, 1.0 },
+  bg = { 0.047, 0.067, 0.102 }, panel = { 0.071, 0.098, 0.145 }, card = { 0.082, 0.114, 0.165 },
+  row_alt = { 0.060, 0.084, 0.124 }, sel = { 0.063, 0.200, 0.400 },
+  text = { 0.91, 0.93, 0.96 }, dim = { 0.56, 0.62, 0.71 }, accent = { 0.075, 0.435, 0.905 },
+  accent_hover = { 0.14, 0.51, 0.97 }, accent_text = { 0.36, 0.64, 1.0 },
+  border = { 0.150, 0.200, 0.285 }, danger = { 0.95, 0.42, 0.42 },
+  btn = { 0.095, 0.130, 0.190 }, btn_hover = { 0.135, 0.185, 0.270 }, btn_off = { 0.070, 0.095, 0.138 },
+  btn_danger = { 0.50, 0.17, 0.20 }, star = { 1.0, 0.80, 0.25 }, tag = { 0.55, 0.75, 1.0 }, tag_bg = { 0.075, 0.155, 0.285 },
 }
 
 -- Коды клавиш gfx.getchar (многобайтные значения из документации REAPER)
@@ -223,6 +229,7 @@ local undo_stack = {}      -- удаления: { removed = { {pos=, path=}, ...
 local source = "recent"    -- источник списка: "recent" (Recent projects) | "library" (все проекты)
 local show_settings = false -- открыто окно «Папки»
 local recent_items = {}    -- список Recent (активный список - items)
+local fav_items = {}       -- источник «Избранное»: проекты с ★ из любых списков (собирается при выборе источника)
 local lib = { dirs = {}, items = {}, loaded = false, skip_backups = true, with_bak = false, scan = nil }
 
 ----------------------------------------------------------------------
@@ -272,8 +279,15 @@ local SORT_KEYS = {
   { key = "missing", label = "Не найденные", default_desc = false }, -- сначала пропавшие
 }
 
+local SORT_BUTTONS = {}
+for _, sk in ipairs(SORT_KEYS) do if sk.key ~= "missing" then SORT_BUTTONS[#SORT_BUTTONS + 1] = sk end end
+
 local AGE_STEPS = { { 0, "любой" }, { 90, "старше 3 мес." }, { 180, "старше 6 мес." },
   { 365, "старше 1 года" }, { 730, "старше 2 лет" } }
+-- размер файла (байты, от и до) и «изменён не раньше, чем N дней назад»
+local MB = 1024 * 1024
+local SIZE_STEPS = { { nil, "любой" }, { { 0, 1 * MB }, "до 1 МБ" }, { { 1 * MB, 10 * MB }, "1-10 МБ" }, { { 10 * MB, math.huge }, "больше 10 МБ" } }
+local DATE_STEPS = { { 0, "любая" }, { 1, "за сутки" }, { 7, "за 7 дней" }, { 30, "за 30 дней" }, { 365, "за год" } }
 
 local sort_key, sort_desc = "order", false
 do
@@ -284,7 +298,7 @@ do
   sort_desc = reaper.GetExtState(section, "sort_desc") == "1"
 end
 
-local f_missing, f_age = false, 1 -- фильтры: только пропавшие, возраст (индекс AGE_STEPS)
+local f_missing, f_found, f_age, f_size, f_date = false, false, 1, 1, 1 -- фильтры: только пропавшие, только найденные, возраст, размер, дата (индексы шагов)
 
 local has_js_stat = reaper.JS_File_Stat ~= nil
 local has_dates = false
@@ -337,7 +351,6 @@ local function fmt_date(mtime)
 end
 
 local function compare_items(a, b)
-  if a.fav ~= b.fav then return a.fav end -- избранные всегда сверху
   local va, vb
   if sort_key == "name" then va, vb = a.name_l, b.name_l
   elseif sort_key == "folder" then va, vb = a.dir_l, b.dir_l
@@ -365,7 +378,7 @@ local function index_of(it)
 end
 
 local function filters_active()
-  return query ~= "" or f_missing or f_age > 1
+  return query ~= "" or f_missing or f_found or f_age > 1 or f_size > 1 or f_date > 1
 end
 
 local function refresh_view()
@@ -375,6 +388,11 @@ local function refresh_view()
   if f_age > 1 then
     cutoff = os.date("%Y.%m.%d %H:%M:%S", os.time() - AGE_STEPS[f_age][1] * 86400)
   end
+  local newer
+  if f_date > 1 then
+    newer = os.date("%Y.%m.%d %H:%M:%S", os.time() - DATE_STEPS[f_date][1] * 86400)
+  end
+  local size_range = SIZE_STEPS[f_size][1]
   view = {}
   for _, it in ipairs(items) do
     local ok = true
@@ -382,7 +400,10 @@ local function refresh_view()
       if not it.hay_l:find(wd, 1, true) then ok = false; break end
     end
     if ok and f_missing and it.exists then ok = false end
+    if ok and f_found and not it.exists then ok = false end
     if ok and cutoff and not (it.mtime and it.mtime < cutoff) then ok = false end
+    if ok and newer and not (it.mtime and it.mtime >= newer) then ok = false end
+    if ok and size_range and not (it.size and it.size >= size_range[1] and it.size < size_range[2]) then ok = false end
     if ok then view[#view + 1] = it end
   end
   if not index_of(cursor) then cursor = view[1] end
@@ -568,6 +589,15 @@ do
     scroll = 0
   end
 
+  -- сколько проектов в индексе (для счётчика в боковой панели, до первой загрузки списка)
+  function lib.index_count()
+    if lib.index_n then return lib.index_n end
+    local n = 0
+    for _, e in ipairs(load_index()) do if under_dirs(e.path) then n = n + 1 end end
+    lib.index_n = n
+    return n
+  end
+
   function lib.ensure_loaded()
     if lib.loaded then return end
     lib.loaded = true
@@ -576,6 +606,7 @@ do
       if under_dirs(e.path) then entries[#entries + 1] = e end
     end
     lib.items = build(entries, true)
+    lib.index_n = nil
   end
 
   local function is_project_file(name)
@@ -705,13 +736,29 @@ do
   end
 end
 
+-- проекты с ★: берутся из избранного (по путям), размер и дата - с диска
+local function build_fav_items()
+  local paths = {}
+  for p in pairs(favs) do paths[#paths + 1] = p end
+  table.sort(paths, function(a, b) return fold(a) < fold(b) end)
+  local list = {}
+  for _, p in ipairs(paths) do
+    local exists = p ~= "" and reaper.file_exists(p)
+    local size, mtime
+    if exists then size, mtime = file_info(p) end
+    list[#list + 1] = make_item(p, exists, size, mtime, #list + 1)
+  end
+  return list
+end
+
 set_source = function(src)
   if src == source and not show_settings then return end
   show_settings = false
   edit = nil
   if src == "library" then lib.ensure_loaded() end
   source = src
-  items = (src == "recent") and recent_items or lib.items
+  if src == "favs" then fav_items = build_fav_items() end
+  items = (src == "recent") and recent_items or (src == "favs" and fav_items or lib.items)
   refresh_meta(items)
   cursor, anchor, last_click_it = nil, nil, nil
   update_has_dates()
@@ -742,6 +789,10 @@ local function toggle_fav(it)
   it.fav = not it.fav
   favs[it.path] = it.fav or nil
   save_meta()
+  if source == "favs" and not it.fav then -- в «Избранном» проект без ★ из списка уходит
+    for i, v in ipairs(items) do if v == it then table.remove(items, i); break end end
+    if cursor == it then cursor = nil end
+  end
   apply_sort()
 end
 
@@ -1032,9 +1083,9 @@ end
 
 -- Положение колонок для окна шириной w. Без js_ReaScriptAPI даты нет - колонка
 -- «Дата» скрыта. В узком окне имя/дата/размер временно ужимаются, путь не меньше минимума.
-local function layout(w)
-  local right = w - 26 -- справа остаётся место под полосу прокрутки
-  local avail = right - TEXT_X
+local function layout(x0, w)
+  local right = x0 + w - 26 -- справа остаётся место под полосу прокрутки
+  local avail = right - (x0 + TEXT_X)
   local nw, dw, sw = col_w.name, has_dates and col_w.date or 0, col_w.size
   local fixed = nw + dw + sw
   if avail - fixed < COL_MIN.path then
@@ -1043,7 +1094,7 @@ local function layout(w)
     fixed = nw + dw + sw
   end
   local pw = avail - fixed
-  local L = { right = right, name_x = TEXT_X, name_w = nw, path_x = TEXT_X + nw, path_w = pw }
+  local L = { right = right, name_x = x0 + TEXT_X, name_w = nw, path_x = x0 + TEXT_X + nw, path_w = pw }
   L.date_x, L.date_w = L.path_x + pw, dw
   L.size_x, L.size_w = L.date_x + dw, sw
   return L
@@ -1139,7 +1190,9 @@ local function move_cursor_to(idx)
 end
 
 local function page_rows()
-  return math.max(1, math.floor((gfx.h - HEAD_H - COLS_H - INFO_H - FOOT_H) / ROW_H))
+  -- видимая высота списка: окно минус шапка, три строки управления, заголовки колонок, панель проекта и подвал
+  local list_h = gfx.h - (HEAD_H + 12 + 36 + 10 + 34 + 12 + COLS_H) - INFO_H - 6 - 6 - FOOT_H
+  return math.max(1, math.floor(list_h / ROW_H))
 end
 
 -- Одно нажатие клавиши. Возвращает "close", если окно нужно закрыть.
@@ -1167,7 +1220,7 @@ local function handle_key(ch)
   elseif ch == KEY.home then move_cursor_to(1)
   elseif ch == KEY["end"] then move_cursor_to(#view)
   elseif ch == 9 or ch == KEY.ins then -- Tab / Insert: отметить и перейти ниже
-    if cursor and source == "recent" then
+    if cursor then
       cursor.checked = not cursor.checked
       anchor = cursor
       move_cursor_to(idx + 1)
@@ -1182,10 +1235,6 @@ local function row_click(it, shift, now)
   local dbl = not shift and last_click_it == it and (now - last_click_t) < DOUBLE_CLICK
   last_click_it, last_click_t = it, now
   cursor = it
-  if source == "library" then -- в «Всех проектах» галочек нет: клик ставит курсор
-    if dbl then last_click_it = nil end
-    return dbl
-  end
   if shift and anchor and anchor ~= it then
     local a, b = index_of(anchor), index_of(it)
     if a and b then
@@ -1201,7 +1250,8 @@ local function row_click(it, shift, now)
 end
 
 ----------------------------------------------------------------------
--- Отрисовка
+-- Отрисовка: тёмная тема; шапка (название, поиск, быстрые кнопки), боковая панель (источники и фильтры),
+-- список проектов, панель выбранного проекта и подвал с действиями. Всё на стандартных средствах gfx REAPER.
 ----------------------------------------------------------------------
 local function set_color(c, a) gfx.set(c[1], c[2], c[3], a or 1) end
 
@@ -1216,78 +1266,256 @@ local function mouse_in(x, y, w, h)
   return mx >= x and mx < x + w and my >= y and my < y + h
 end
 
+-- Кэш обрезанных строк: результат зависит только от строки, ширины и размера шрифта (высота текста gfx.texth)
+local clip_cache, clip_cache_n = {}, 0
+local function clip_remember(key, value)
+  if clip_cache_n >= 4000 then clip_cache, clip_cache_n = {}, 0 end
+  clip_cache[key] = value
+  clip_cache_n = clip_cache_n + 1
+  return value
+end
+
 -- Обрезка слева ("…хвост пути") - имя файла в конце пути самое важное
 local function clip_tail(str, max_w)
   if gfx.measurestr(str) <= max_w then return str end
+  local key = "t|" .. tostring(gfx.texth) .. "|" .. math.floor(max_w) .. "|" .. str
+  local hit = clip_cache[key]
+  if hit then return hit end
   local s = str
   while #s > 1 do
     local ok, off = pcall(utf8.offset, s, 2)
     if not ok or not off then off = 2 end
     s = s:sub(off)
-    if gfx.measurestr("…" .. s) <= max_w then return "…" .. s end
+    if gfx.measurestr("…" .. s) <= max_w then return clip_remember(key, "…" .. s) end
   end
-  return "…"
+  return clip_remember(key, "…")
 end
 
 -- Обрезка справа ("начало…")
 local function clip_head(str, max_w)
   if gfx.measurestr(str) <= max_w then return str end
+  local key = "h|" .. tostring(gfx.texth) .. "|" .. math.floor(max_w) .. "|" .. str
+  local hit = clip_cache[key]
+  if hit then return hit end
   local s = str
   while #s > 1 do
     local ok, off = pcall(utf8.offset, s, -1)
     if not ok or not off then off = #s end
     s = s:sub(1, off - 1)
-    if gfx.measurestr(s .. "…") <= max_w then return s .. "…" end
+    if gfx.measurestr(s .. "…") <= max_w then return clip_remember(key, s .. "…") end
   end
-  return "…"
+  return clip_remember(key, "…")
 end
 
-local function draw_button(x, y, w, h, label, enabled, click, color, fsize)
+-- Скруглённый прямоугольник: заливка и рамка
+local function rrect(x, y, w, h, r, c, a)
+  set_color(c, a)
+  r = math.max(0, math.min(r, math.floor(w / 2), math.floor(h / 2)))
+  if r == 0 then gfx.rect(x, y, w, h, 1); return end
+  gfx.rect(x + r, y, w - 2 * r, h, 1)
+  gfx.rect(x, y + r, r, h - 2 * r, 1)
+  gfx.rect(x + w - r, y + r, r, h - 2 * r, 1)
+  gfx.circle(x + r, y + r, r, 1, 1)
+  gfx.circle(x + w - r - 1, y + r, r, 1, 1)
+  gfx.circle(x + r, y + h - r - 1, r, 1, 1)
+  gfx.circle(x + w - r - 1, y + h - r - 1, r, 1, 1)
+end
+
+local function rframe(x, y, w, h, r, c, a)
+  set_color(c, a)
+  gfx.roundrect(x, y, w - 1, h - 1, r, 1)
+end
+
+-- Значки из линий и фигур gfx (шрифтам доверять нельзя): (x, y) - центр, s - размер
+local function icon(kind, x, y, s, c)
+  set_color(c)
+  local h = s / 2
+  if kind == "folder" then
+    gfx.rect(x - h, y - h * 0.5, s, h * 1.4, 0)
+    gfx.rect(x - h, y - h * 0.8, s * 0.42, h * 0.3, 1)
+  elseif kind == "clock" then
+    gfx.circle(x, y, h, 0, 1)
+    gfx.line(x, y, x, y - h * 0.62)
+    gfx.line(x, y, x + h * 0.45, y + h * 0.2)
+  elseif kind == "gear" then
+    gfx.circle(x, y, h * 0.5, 0, 1)
+    for k = 0, 7 do
+      local a = k * math.pi / 4
+      gfx.line(x + math.cos(a) * h * 0.72, y + math.sin(a) * h * 0.72, x + math.cos(a) * h, y + math.sin(a) * h)
+    end
+  elseif kind == "search" then
+    gfx.circle(x - h * 0.15, y - h * 0.15, h * 0.62, 0, 1)
+    gfx.line(x + h * 0.3, y + h * 0.3, x + h * 0.9, y + h * 0.9)
+  elseif kind == "x" then
+    gfx.line(x - h * 0.55, y - h * 0.55, x + h * 0.55, y + h * 0.55)
+    gfx.line(x - h * 0.55, y + h * 0.55, x + h * 0.55, y - h * 0.55)
+  elseif kind == "check" then
+    gfx.line(x - h * 0.6, y, x - h * 0.15, y + h * 0.5)
+    gfx.line(x - h * 0.6, y + 1, x - h * 0.15, y + h * 0.5 + 1)
+    gfx.line(x - h * 0.15, y + h * 0.5, x + h * 0.65, y - h * 0.5)
+    gfx.line(x - h * 0.15, y + h * 0.5 + 1, x + h * 0.65, y - h * 0.5 + 1)
+  elseif kind == "play" then
+    gfx.triangle(x - h * 0.45, y - h * 0.65, x - h * 0.45, y + h * 0.65, x + h * 0.7, y)
+  elseif kind == "trash" then
+    gfx.rect(x - h * 0.5, y - h * 0.3, h, h * 1.15, 0)
+    gfx.line(x - h * 0.75, y - h * 0.4, x + h * 0.75, y - h * 0.4)
+    gfx.rect(x - h * 0.22, y - h * 0.72, h * 0.44, h * 0.32, 0)
+  elseif kind == "undo" then
+    gfx.circle(x, y, h * 0.7, 0, 1)
+    gfx.line(x - h * 0.7, y - h * 0.1, x - h * 0.3, y - h * 0.7)
+    gfx.line(x - h * 0.7, y - h * 0.1, x - h * 0.05, y - h * 0.2)
+  elseif kind == "doc" then
+    gfx.rect(x - h * 0.65, y - h, h * 1.3, s, 0)
+    gfx.line(x - h * 0.35, y - h * 0.3, x + h * 0.35, y - h * 0.3)
+    gfx.line(x - h * 0.35, y + h * 0.1, x + h * 0.35, y + h * 0.1)
+    gfx.line(x - h * 0.35, y + h * 0.5, x + h * 0.1, y + h * 0.5)
+  elseif kind == "filter" then
+    gfx.line(x - h, y - h * 0.6, x + h, y - h * 0.6)
+    gfx.line(x - h * 0.65, y, x + h * 0.65, y)
+    gfx.line(x - h * 0.3, y + h * 0.6, x + h * 0.3, y + h * 0.6)
+  elseif kind == "warn" then
+    gfx.triangle(x, y - h, x - h, y + h * 0.8, x + h, y + h * 0.8)
+  elseif kind == "star" or kind == "star_o" then -- звезда: заливка треугольниками от центра или контур линиями
+    local pts = {}
+    for k = 0, 9 do
+      local a = -math.pi / 2 + k * math.pi / 5
+      local r = (k % 2 == 0) and h or h * 0.44
+      pts[#pts + 1] = { x + math.cos(a) * r, y + 0.06 * s + math.sin(a) * r }
+    end
+    for k = 1, 10 do
+      local a, b = pts[k], pts[k % 10 + 1]
+      if kind == "star" then gfx.triangle(x, y + 0.06 * s, a[1], a[2], b[1], b[2]) else gfx.line(a[1], a[2], b[1], b[2]) end
+    end
+  elseif kind == "tri_down" then
+    gfx.triangle(x - h * 0.5, y - h * 0.3, x + h * 0.5, y - h * 0.3, x, y + h * 0.4)
+  elseif kind == "tri_up" then
+    gfx.triangle(x - h * 0.5, y + h * 0.3, x + h * 0.5, y + h * 0.3, x, y - h * 0.4)
+  elseif kind == "chev" then -- шеврон вниз
+    gfx.line(x - h * 0.5, y - h * 0.2, x, y + h * 0.3)
+    gfx.line(x, y + h * 0.3, x + h * 0.5, y - h * 0.2)
+  elseif kind == "sort" then -- ⇕: стрелки вверх и вниз
+    gfx.line(x - h * 0.35, y - h * 0.7, x - h * 0.35, y + h * 0.7)
+    gfx.line(x + h * 0.35, y - h * 0.7, x + h * 0.35, y + h * 0.7)
+    gfx.line(x - h * 0.35, y - h * 0.7, x - h * 0.7, y - h * 0.2)
+    gfx.line(x - h * 0.35, y - h * 0.7, x, y - h * 0.2)
+    gfx.line(x + h * 0.35, y + h * 0.7, x, y + h * 0.2)
+    gfx.line(x + h * 0.35, y + h * 0.7, x + h * 0.7, y + h * 0.2)
+  end
+end
+
+-- Кнопка со скруглением; ic - значок слева от подписи. Возвращает true на клик (при enabled)
+local function draw_button(x, y, w, h, label, enabled, click, color, fsize, ic)
   local hov = enabled and mouse_in(x, y, w, h)
   local c = (not enabled) and col.btn_off or (hov and col.btn_hover or (color or col.btn))
-  set_color(c); gfx.rect(x, y, w, h, 1)
-  set_color(col.border); gfx.rect(x, y, w, h, 0)
+  if enabled and color == col.accent and hov then c = col.accent_hover end
+  rrect(x, y, w, h, 7, c)
+  rframe(x, y, w, h, 7, (enabled and color) and c or col.border)
   local size = fsize or F_BTN
   gfx.setfont(1, "Arial", size)
-  while size > 12 and gfx.measurestr(label) > w - 12 do
+  local avail = w - 14 - (ic and 26 or 0)
+  while size > 12 and gfx.measurestr(label) > avail do
     size = size - 1
     gfx.setfont(1, "Arial", size)
   end
   local tw = gfx.measurestr(label)
-  draw_text(label, x + (w - tw) / 2, y + (h - size) / 2 - 1, enabled and col.text or col.dim)
+  local total = tw + (ic and 26 or 0)
+  local tx = x + (w - total) / 2
+  local fg = enabled and col.text or col.dim
+  if ic then icon(ic, tx + 9, y + h / 2, 16, fg); tx = tx + 26 end
+  draw_text(label, tx, y + (h - size) / 2 - 1, fg)
   return hov and click
 end
 
 local function draw_checkbox(x, y, checked)
-  set_color(checked and col.accent or col.bg); gfx.rect(x, y, CB, CB, 1)
-  set_color(col.border); gfx.rect(x, y, CB, CB, 0)
-  if checked then
-    gfx.setfont(1, "Arial", F_ROW)
-    draw_text("✓", x + 3, y, col.text)
-  end
+  rrect(x, y, CB, CB, 5, checked and col.accent or col.bg)
+  rframe(x, y, CB, CB, 5, checked and col.accent or col.border)
+  if checked then icon("check", x + CB / 2, y + CB / 2, 14, col.text) end
 end
+
+-- Переключатель (как в макете: плашка с кружком)
+local function draw_switch(x, y, on)
+  rrect(x, y, 38, 20, 10, on and col.accent or col.btn)
+  set_color(col.text); gfx.circle(x + (on and 28 or 10), y + 10, 7, 1, 1)
+end
+
+-- Выпадающее меню в точке (x, y): current - номер отмеченного пункта; -> номер выбранного или nil
+local function popup(labels, current, x, y)
+  local parts = {}
+  for i, lab in ipairs(labels) do parts[i] = (i == current and "!" or "") .. lab end
+  gfx.x, gfx.y = x, y
+  local r = gfx.showmenu(table.concat(parts, "|"))
+  if r and r > 0 then return r end
+  return nil
+end
+
+----------------------------------------------------------------------
+-- Геометрия: все прямоугольники окна в одном месте (рисование, клики и тесты берут числа отсюда)
+----------------------------------------------------------------------
+local function geometry(w, h)
+  local g = { w = w, h = h, pad = 14 }
+  g.side_w = SIDE_W
+  g.head_h = HEAD_H
+  g.main_x = SIDE_W + g.pad
+  g.main_w = w - g.main_x - g.pad
+  g.foot_y = h - FOOT_H
+  g.info_y = g.foot_y - INFO_H - 6
+  -- шапка: три кнопки справа и поле поиска между названием и ними
+  g.hb_w = 86
+  g.hb_x0 = w - 14 - 3 * g.hb_w
+  g.search_x, g.search_y, g.search_h = SIDE_W + g.pad, 24, 44
+  g.search_w = g.hb_x0 - 22 - g.search_x
+  -- основная область: сортировка, фильтры-кнопки, заголовки колонок, список, панель проекта
+  g.sort_y, g.sort_h = HEAD_H + 12, 36
+  g.chip_y, g.chip_h = g.sort_y + g.sort_h + 10, 34
+  g.cols_y = g.chip_y + g.chip_h + 12
+  g.list_y = g.cols_y + COLS_H
+  g.list_h = math.max(60, g.info_y - g.list_y - 6)
+  g.text_w = g.main_w - BTN_W - 100                      -- ширина текста панели проекта
+  g.note_x, g.note_y = g.main_x + 78 + 64, g.info_y + 62 -- поле пометки
+  g.note_w, g.note_h = g.text_w - 78, 28
+  -- боковая панель
+  g.si_y0, g.si_h, g.si_step = HEAD_H + 14, 38, 40       -- источники: Все проекты, Избранное, Недавние, Папки
+  g.fil_title_y = g.si_y0 + 4 * g.si_step + 14
+  g.fil_toggle_y = g.fil_title_y + 30
+  g.fil_dd_y0 = g.fil_toggle_y + 42
+  g.fil_dd_step, g.fil_dd_h = 40, 32
+  -- подвал
+  g.by, g.bh, g.gap = g.foot_y + 54, 48, 10
+  g.tab_w = 270
+  return g
+end
+
+if type(SSM_PM_GEOMETRY_HOOK) == "function" then SSM_PM_GEOMETRY_HOOK(geometry) end -- только для тестов
+
+-- Номер строки: центр по вертикали
+local function row_top(G, i, scroll_) return G.list_y + (i - 1) * ROW_H - scroll_ end
+
+local SIDE_ITEMS = {
+  { id = "library", label = "Все проекты", icon = "folder" },
+  { id = "favs", label = "Избранное", icon = "star_o" },
+  { id = "recent", label = "Недавние", icon = "clock" },
+  { id = "folders", label = "Папки", icon = "folder" },
+}
 
 local function draw()
   local w, h = gfx.w, gfx.h
+  local G = geometry(w, h)
   local cap = gfx.mouse_cap
   local down = (cap & 1) == 1
   local click = down and (last_cap & 1) == 0
   local shift = (cap & 8) ~= 0
   last_cap = cap
   local lclick = click and not show_settings -- клики по списку и панели проекта не проходят под окно «Папки»
-
-  local list_y = HEAD_H + COLS_H
-  local foot_y = h - FOOT_H
-  local info_y = foot_y - INFO_H
-  local list_h = math.max(60, info_y - list_y)
-  local text_w = w - 32 - BTN_W - 12                 -- ширина текста панели проекта
-  local note_x, note_y = 16 + NOTE_LABEL_W, info_y + 54 -- поле пометки
-  local note_w, note_h = text_w - NOTE_LABEL_W, 26
+  local main_x, main_w = G.main_x, G.main_w
+  local list_y, list_h = G.list_y, G.list_h
+  local foot_y, info_y = G.foot_y, G.info_y
+  local gap = G.gap
+  local side_click_y, chip_x -- где открывать выпадающие меню
 
   set_color(col.bg); gfx.rect(0, 0, w, h, 1)
 
   -- клик мимо поля пометки завершает её редактирование
-  if edit and click and not mouse_in(note_x, note_y, note_w, note_h) then commit_edit() end
+  if edit and click and not mouse_in(G.note_x, G.note_y, G.note_w, G.note_h) then commit_edit() end
 
   -- ширина колонок: перетаскивание разделителя, двойной клик - сброс
   if col_drag then
@@ -1298,9 +1526,9 @@ local function draw()
       save_cols()
     end
   end
-  local L = layout(w)
+  local L = layout(main_x, main_w)
   local divs = dividers(L)
-  if lclick and not col_drag and gfx.mouse_y >= HEAD_H and gfx.mouse_y < list_y then
+  if lclick and not col_drag and gfx.mouse_y >= G.cols_y and gfx.mouse_y < list_y then
     for _, dv in ipairs(divs) do
       if math.abs(gfx.mouse_x - dv.x) <= 4 then
         local now = reaper.time_precise()
@@ -1338,6 +1566,7 @@ local function draw()
 
   -- Полоса прокрутки: ползунок тащится мышью, клик по дорожке переносит ползунок
   -- в это место (и его можно сразу тащить дальше). Зона захвата - правые 14 пикселей списка.
+  local sb_x = main_x + main_w - 14
   local thumb_h, thumb_y = 0, list_y
   if max_scroll > 0 then
     thumb_h = math.max(24, list_h * list_h / total_h)
@@ -1350,7 +1579,7 @@ local function draw()
       else
         sb_drag = nil
       end
-    elseif lclick and gfx.mouse_x >= w - 14 and gfx.mouse_y >= list_y and gfx.mouse_y < list_y + list_h then
+    elseif lclick and gfx.mouse_x >= sb_x and gfx.mouse_x < main_x + main_w and gfx.mouse_y >= list_y and gfx.mouse_y < list_y + list_h then
       if gfx.mouse_y < thumb_y or gfx.mouse_y > thumb_y + thumb_h then
         thumb_y = math.max(list_y, math.min(gfx.mouse_y - thumb_h / 2, list_y + travel))
         scroll = (thumb_y - list_y) / travel * max_scroll
@@ -1361,45 +1590,53 @@ local function draw()
     sb_drag = nil
   end
 
-  -- строки списка (шапка и панели перекрывают выступающие части)
+  -- строки списка (шапка и панели потом перекрывают выступающие части)
   gfx.setfont(1, "Arial", F_ROW)
   local open_now, fav_now
+  local cbx = main_x + 12
+  local star_x = main_x + STAR_X
   for i, it in ipairs(view) do
-    local ry = list_y + (i - 1) * ROW_H - scroll
+    local ry = row_top(G, i, scroll)
     if ry + ROW_H > list_y and ry < list_y + list_h then
-      if i % 2 == 0 then set_color(col.row_alt); gfx.rect(0, ry, w, ROW_H, 1) end
+      local selected = (it == cursor)
+      if selected then
+        rrect(main_x, ry + 1, main_w - 16, ROW_H - 2, 6, col.sel)
+      elseif i % 2 == 0 then
+        set_color(col.row_alt); gfx.rect(main_x, ry, main_w - 16, ROW_H, 1)
+      end
 
       local in_list = gfx.mouse_y >= list_y and gfx.mouse_y < list_y + list_h
-      if in_list and mouse_in(0, ry, w - 14, ROW_H) then
-        set_color(col.panel); gfx.rect(0, ry, w, ROW_H, 1)
+      if in_list and mouse_in(main_x, ry, main_w - 16, ROW_H) then
+        if not selected then rrect(main_x, ry + 1, main_w - 16, ROW_H - 2, 6, col.panel) end
         if lclick then
-          if mouse_in(STAR_X - 2, ry, STAR_W + 4, ROW_H) then
+          if mouse_in(star_x - 4, ry, STAR_W + 8, ROW_H) then
             fav_now = it
           elseif row_click(it, shift, reaper.time_precise()) then
             open_now = it
           end
         end
       end
-      if it == cursor then
-        set_color(col.accent); gfx.rect(1, ry, w - 16, ROW_H, 0)
-      end
+      if selected then rframe(main_x, ry + 1, main_w - 16, ROW_H - 2, 6, col.accent) end
 
-      if source == "recent" then draw_checkbox(16, ry + (ROW_H - CB) / 2, it.checked) end
+      draw_checkbox(cbx, ry + (ROW_H - CB) / 2, it.checked)
       gfx.setfont(1, "Arial", F_ROW)
-      draw_text(it.fav and "★" or "☆", STAR_X, ry + (ROW_H - F_ROW) / 2 - 1, it.fav and col.star or col.dim)
+      icon(it.fav and "star" or "star_o", star_x + STAR_W / 2, ry + ROW_H / 2, 16, it.fav and col.star or col.dim)
 
       local small_y = ry + (ROW_H - F_SMALL) / 2
       local text_y = ry + (ROW_H - F_ROW) / 2 - 1
       gfx.setfont(1, "Arial", F_ROW)
       draw_text(clip_head(it.title, L.name_w - 12), L.name_x + 4, text_y, it.exists and col.text or col.dim)
 
-      -- пометка - у правого края колонки пути
+      -- пометка - плашка у правого края колонки пути
       local note_tag_w = 0
       if it.note ~= "" then
         gfx.setfont(1, "Arial", F_SMALL)
-        local shown = clip_head(it.note, math.min(220, L.path_w * 0.4))
-        note_tag_w = gfx.measurestr(shown) + 14
-        draw_text(shown, L.date_x - note_tag_w + 4, small_y, col.tag)
+        local shown = clip_head(it.note, math.min(200, L.path_w * 0.4))
+        local tw = gfx.measurestr(shown)
+        note_tag_w = tw + 24
+        local tx = L.date_x - note_tag_w
+        rrect(tx, ry + (ROW_H - 22) / 2, tw + 16, 22, 5, col.tag_bg)
+        draw_text(shown, tx + 8, small_y, col.tag)
         gfx.setfont(1, "Arial", F_ROW)
       end
       draw_text(clip_tail(it.path, L.path_w - 12 - note_tag_w), L.path_x + 4, text_y, col.dim)
@@ -1419,177 +1656,263 @@ local function draw()
   if #items == 0 then
     local msg
     if source == "recent" then msg = "Список Recent projects пуст."
+    elseif source == "favs" then msg = "В избранном пока ничего нет: нажмите звезду у проекта."
     elseif #lib.dirs == 0 then msg = "Папки не заданы. Нажмите «Папки» и добавьте папку с проектами."
     elseif lib.scan then msg = "Идёт сканирование…"
     else msg = "Список пуст. Нажмите «Пересканировать»." end
-    draw_text(msg, 16, list_y + 18, col.dim)
+    draw_text(msg, main_x + 16, list_y + 18, col.dim)
   elseif #view == 0 then
-    draw_text("Ничего не найдено. Измените поиск или фильтры.", 16, list_y + 18, col.dim)
+    draw_text("Ничего не найдено. Измените поиск или фильтры.", main_x + 16, list_y + 18, col.dim)
   end
 
   -- полоса прокрутки
   if max_scroll > 0 then
-    local hot = sb_drag ~= nil or mouse_in(w - 14, thumb_y, 14, thumb_h)
-    set_color(sb_drag and col.accent or (hot and col.dim or col.border))
-    gfx.rect(w - 11, thumb_y, 8, thumb_h, 1)
+    local hot = sb_drag ~= nil or mouse_in(sb_x, thumb_y, 14, thumb_h)
+    rrect(sb_x + 3, thumb_y, 8, thumb_h, 4, sb_drag and col.accent or (hot and col.dim or col.border))
   end
 
-  -- заголовки колонок с разделителями
-  set_color(col.row_alt); gfx.rect(0, HEAD_H, w, COLS_H, 1)
-  set_color(col.border); gfx.rect(0, list_y - 1, w, 1, 1)
-  gfx.setfont(1, "Arial", F_SMALL)
-  local hy = HEAD_H + (COLS_H - F_SMALL) / 2 - 1
-  draw_text("Имя", L.name_x + 4, hy, col.dim)
-  draw_text("Путь", L.path_x + 4, hy, col.dim)
-  if has_dates then draw_text("Дата", L.date_x + 4, hy, col.dim) end
-  draw_text("Размер", L.right - 2 - gfx.measurestr("Размер"), hy, col.dim)
-  for _, dv in ipairs(divs) do
-    local hot = (col_drag and col_drag.kind == dv.kind) or (not col_drag and mouse_in(dv.x - 4, HEAD_H, 9, COLS_H))
-    set_color(hot and col.accent or col.border)
-    gfx.rect(dv.x - (hot and 1 or 0), HEAD_H + 4, hot and 3 or 1, COLS_H - 8, 1)
+  -- верх и низ основной области перекрывают выступающие строки
+  set_color(col.bg); gfx.rect(main_x - 4, HEAD_H, main_w + 8, list_y - HEAD_H, 1)
+  gfx.rect(main_x - 4, list_y + list_h, main_w + 8, h - (list_y + list_h), 1)
+
+  -- ===== боковая панель =====
+  set_color(col.panel); gfx.rect(0, HEAD_H, G.side_w, h - HEAD_H, 1)
+  set_color(col.border); gfx.rect(G.side_w - 1, HEAD_H, 1, h - HEAD_H, 1)
+  local side_click
+  do
+    local n_lib = lib.loaded and #lib.items or lib.index_count()
+    local n_fav = 0
+    for _ in pairs(favs) do n_fav = n_fav + 1 end
+    local counts = { library = n_lib, favs = n_fav, recent = #recent_items, folders = #lib.dirs }
+    for i, si in ipairs(SIDE_ITEMS) do
+      local y = G.si_y0 + (i - 1) * G.si_step
+      local active = (si.id == "folders") and show_settings or (si.id == source and not show_settings)
+      local hov = mouse_in(8, y, G.side_w - 16, G.si_h)
+      if active then rrect(8, y, G.side_w - 16, G.si_h, 8, col.accent)
+      elseif hov then rrect(8, y, G.side_w - 16, G.si_h, 8, col.btn_hover) end
+      local fg = active and col.text or col.dim
+      icon(si.icon, 30, y + G.si_h / 2, 18, fg)
+      gfx.setfont(1, "Arial", F_ROW)
+      draw_text(si.label, 52, y + (G.si_h - F_ROW) / 2 - 1, active and col.text or col.text)
+      local cnt = tostring(counts[si.id] or "")
+      draw_text(cnt, G.side_w - 22 - gfx.measurestr(cnt), y + (G.si_h - F_ROW) / 2 - 1, fg)
+      if hov and click then side_click = si.id end
+    end
+
+    -- фильтры
+    set_color(col.border); gfx.rect(14, G.fil_title_y - 12, G.side_w - 28, 1, 1)
+    icon("filter", 24, G.fil_title_y + 8, 16, col.text)
+    gfx.setfont(2, "Arial", F_ROW, "b")
+    draw_text("Фильтры", 44, G.fil_title_y, col.text)
+    gfx.setfont(1, "Arial", F_SMALL + 1)
+    draw_text("Только не найденные", 16, G.fil_toggle_y + 7, col.text)
+    draw_switch(G.side_w - 14 - 38, G.fil_toggle_y + 4, f_missing)
+    if click and mouse_in(8, G.fil_toggle_y, G.side_w - 16, 30) then side_click = "toggle_missing" end
+
+    local dds = {
+      { id = "age", label = "Возраст", value = AGE_STEPS[f_age][2], enabled = has_dates },
+      { id = "size", label = "Размер", value = SIZE_STEPS[f_size][2], enabled = true },
+      { id = "date", label = "Дата", value = DATE_STEPS[f_date][2], enabled = has_dates },
+    }
+    for i, dd in ipairs(dds) do
+      local y = G.fil_dd_y0 + (i - 1) * G.fil_dd_step
+      local hov = dd.enabled and mouse_in(8, y, G.side_w - 16, G.fil_dd_h)
+      rrect(8, y, G.side_w - 16, G.fil_dd_h, 7, hov and col.btn_hover or col.btn_off)
+      rframe(8, y, G.side_w - 16, G.fil_dd_h, 7, col.border)
+      gfx.setfont(1, "Arial", F_SMALL)
+      local active = (dd.id == "age" and f_age > 1) or (dd.id == "size" and f_size > 1) or (dd.id == "date" and f_date > 1)
+      local label = dd.label .. " (" .. dd.value .. ")"
+      if not dd.enabled then label = dd.label .. ": нужен js_ReaScriptAPI" end
+      draw_text(clip_head(label, G.side_w - 60), 18, y + (G.fil_dd_h - F_SMALL) / 2 - 1, active and col.accent_text or (dd.enabled and col.text or col.dim))
+      icon("chev", G.side_w - 26, y + G.fil_dd_h / 2, 12, col.dim)
+      if hov and click then side_click = "dd_" .. dd.id; side_click_y = y + G.fil_dd_h end
+    end
   end
 
-  -- шапка
-  set_color(col.panel); gfx.rect(0, 0, w, HEAD_H, 1)
+  -- ===== шапка =====
+  set_color(col.bg); gfx.rect(0, 0, w, HEAD_H, 1)
   set_color(col.border); gfx.rect(0, HEAD_H - 1, w, 1, 1)
-  gfx.setfont(1, "Arial", F_TITLE)
-  if not filters_active() then
-    draw_text(string.format("%s: %d  (не найдено: %d)", source == "recent" and "Недавние проекты" or "Все проекты",
-      #items, count_missing()), 16, 9, col.text)
-  else
-    draw_text(string.format("Найдено: %d из %d  (не найдено: %d)", #view, #items, count_missing()), 16, 9, col.text)
-  end
+  icon("folder", 36, 46, 38, col.accent)
+  local n_shown = filters_active() and #view or #items
+  gfx.setfont(2, "Arial", 26, "b")
+  draw_text("Проекты", 70, 22, col.text)
+  local tw_title = gfx.measurestr("Проекты")
+  draw_text(tostring(n_shown), 70 + tw_title + 14, 22, col.accent_text)
   gfx.setfont(1, "Arial", F_SMALL)
-  if source == "recent" then
-    draw_text("Галочка - выбрать · ★ - избранное · двойной клик или Enter - открыть · F2 - пометка · Esc - очистить поиск",
-      16, 40, col.dim)
-  else
-    draw_text("★ - избранное · двойной клик или Enter - открыть · F2 - пометка · Esc - очистить поиск · «Папки» - где искать проекты",
-      16, 40, col.dim)
-  end
+  local sub
+  if filters_active() then sub = string.format("(найдено %d из %d, не найдено: %d)", #view, #items, count_missing())
+  else sub = string.format("(не найдено: %d)", count_missing()) end
+  draw_text(sub, 70, 56, col.dim)
   if not has_js_stat then
-    gfx.setfont(1, "Arial", 14)
-    local note = "Дата изменения: нужен js_ReaScriptAPI"
-    draw_text(note, w - 16 - gfx.measurestr(note), 12, col.dim)
+    gfx.setfont(1, "Arial", 13)
+    draw_text("Дата изменения: нужен js_ReaScriptAPI", 70, 74, col.dim)
   end
 
   -- строка поиска: ввод идёт сюда всегда (см. loop), справа кнопка очистки
   do
-    local sx, sw = 16, w - 32
-    set_color(col.bg); gfx.rect(sx, SEARCH_Y, sw, SEARCH_H, 1)
-    set_color(query ~= "" and col.accent or col.border); gfx.rect(sx, SEARCH_Y, sw, SEARCH_H, 0)
+    local sx, sw, sy, sh = G.search_x, G.search_w, G.search_y, G.search_h
+    rrect(sx, sy, sw, sh, 9, col.panel)
+    rframe(sx, sy, sw, sh, 9, query ~= "" and col.accent or col.border)
+    icon("search", sx + 24, sy + sh / 2, 18, col.dim)
     gfx.setfont(1, "Arial", F_ROW)
-    local ty = SEARCH_Y + (SEARCH_H - F_ROW) / 2 - 1
-    local clear_w = SEARCH_H
+    local ty = sy + (sh - F_ROW) / 2 - 1
+    local clear_w = sh
     local shown = ""
     if query == "" then
-      draw_text("Поиск по имени, пути и пометкам: начните печатать…", sx + 10, ty, col.dim)
+      draw_text("Поиск по имени, пути и заметкам…", sx + 48, ty, col.dim)
     else
-      shown = clip_tail(query, sw - clear_w - 20)
-      draw_text(shown, sx + 10, ty, col.text)
+      shown = clip_tail(query, sw - clear_w - 60)
+      draw_text(shown, sx + 48, ty, col.text)
       local cx = sx + sw - clear_w
-      local hov = mouse_in(cx, SEARCH_Y, clear_w, SEARCH_H)
-      set_color(hov and col.btn_hover or col.btn); gfx.rect(cx + 1, SEARCH_Y + 1, clear_w - 2, SEARCH_H - 2, 1)
-      draw_text("✕", cx + (clear_w - gfx.measurestr("✕")) / 2, ty, col.text)
+      local hov = mouse_in(cx, sy, clear_w, sh)
+      icon("x", cx + clear_w / 2, sy + sh / 2, 18, hov and col.text or col.dim)
       if hov and click then set_query("") end
     end
     if not edit and math.floor(reaper.time_precise() * 2) % 2 == 0 then -- мигающий курсор
       set_color(col.text)
-      gfx.rect(sx + 10 + gfx.measurestr(shown) + 1, SEARCH_Y + 7, 1, SEARCH_H - 14, 1)
+      gfx.rect(sx + 48 + gfx.measurestr(shown) + 1, sy + 10, 1, sh - 20, 1)
     end
   end
 
-  -- ряд кнопок сортировки
+  -- быстрые кнопки справа: Избранное, Недавние, Настройки («Папки»)
+  local head_click
   do
-    local n, gap = #SORT_KEYS, 6
-    local bw2 = (w - 32 - gap * (n - 1)) / n
+    local specs = {
+      { id = "favs", label = "Избранное", ic = "star_o", active = source == "favs" and not show_settings },
+      { id = "recent", label = "Недавние", ic = "clock", active = source == "recent" and not show_settings },
+      { id = "folders", label = "Настройки", ic = "gear", active = show_settings },
+    }
+    for i, b in ipairs(specs) do
+      local x = G.hb_x0 + (i - 1) * G.hb_w
+      local hov = mouse_in(x, 12, G.hb_w, 66)
+      if hov then rrect(x + 2, 12, G.hb_w - 4, 66, 8, col.btn_hover) end
+      local fg = b.active and col.accent_text or col.text
+      icon(b.ic, x + G.hb_w / 2, 36, 22, fg)
+      gfx.setfont(1, "Arial", F_SMALL)
+      draw_text(b.label, x + (G.hb_w - gfx.measurestr(b.label)) / 2, 56, fg)
+      if i > 1 then set_color(col.border); gfx.rect(x, 22, 1, 46, 1) end
+      if hov and click then head_click = b.id end
+    end
+  end
+
+  -- ===== основная область: сортировка =====
+  do
+    local n, sgap = #SORT_BUTTONS, 8
+    local bw2 = math.min(190, (main_w - sgap * (n - 1)) / n)
     local clicked_key
-    for i, sk in ipairs(SORT_KEYS) do
+    for i, sk in ipairs(SORT_BUTTONS) do
       local active = (sk.key == sort_key)
       local enabled = not (sk.key == "date" and not has_dates)
       local label = sk.label
-      if sk.key == "order" and source == "library" then label = "Как найдено" end
-      if active and (sk.key ~= "order" or sort_desc) then label = label .. (sort_desc and " ▼" or " ▲") end
-      local x = 16 + (i - 1) * (bw2 + gap)
-      local hov = enabled and mouse_in(x, SORT_Y, bw2, SORT_H)
+      if sk.key == "order" and source ~= "recent" then label = "Как найдено" end
+      local x = main_x + (i - 1) * (bw2 + sgap)
+      local hov = enabled and mouse_in(x, G.sort_y, bw2, G.sort_h)
       local c = (not enabled) and col.btn_off or (active and col.accent or (hov and col.btn_hover or col.btn))
-      set_color(c); gfx.rect(x, SORT_Y, bw2, SORT_H, 1)
-      set_color(col.border); gfx.rect(x, SORT_Y, bw2, SORT_H, 0)
+      rrect(x, G.sort_y, bw2, G.sort_h, 8, c)
+      rframe(x, G.sort_y, bw2, G.sort_h, 8, active and col.accent or col.border)
       local size = F_SORT
       gfx.setfont(1, "Arial", size)
-      while size > 11 and gfx.measurestr(label) > bw2 - 8 do
+      while size > 11 and gfx.measurestr(label) > bw2 - 40 do
         size = size - 1
         gfx.setfont(1, "Arial", size)
       end
-      draw_text(label, x + (bw2 - gfx.measurestr(label)) / 2, SORT_Y + (SORT_H - size) / 2 - 1,
-        enabled and col.text or col.dim)
+      local fg = enabled and col.text or col.dim
+      local tw = gfx.measurestr(label)
+      local tx = x + (bw2 - tw - 22) / 2
+      draw_text(label, tx, G.sort_y + (G.sort_h - size) / 2 - 1, fg)
+      if active and (sk.key ~= "order" or sort_desc) then
+        icon(sort_desc and "tri_down" or "tri_up", tx + tw + 14, G.sort_y + G.sort_h / 2, 14, fg)
+      elseif sk.key == "order" then
+        icon("chev", tx + tw + 14, G.sort_y + G.sort_h / 2, 12, fg)
+      else
+        icon("sort", tx + tw + 14, G.sort_y + G.sort_h / 2, 14, enabled and col.dim or col.border)
+      end
       if hov and click then clicked_key = sk.key end
     end
     if clicked_key then set_sort(clicked_key) end
   end
 
-  -- второй ряд: источник списка, фильтры, массовая отметка (Недавние) или «Папки» (Все проекты)
+  -- ===== основная область: фильтры-кнопки и массовая отметка =====
+  local chip_click
   do
     local specs = {
-      { id = "recent", w = 112, label = "Недавние", color = source == "recent" and col.accent or nil },
-      { id = "library", w = 112, label = "Все проекты", color = source == "library" and col.accent or nil },
-      { id = "missing", w = 190, label = "Только не найденные", color = f_missing and col.accent or nil },
-      { id = "age", w = 210, enabled = has_dates, color = f_age > 1 and col.accent or nil,
-        label = has_dates and ("Возраст: " .. AGE_STEPS[f_age][2]) or "Возраст: нужен js_ReaScriptAPI" },
+      { id = "found", w = 126, label = "Найденные", ic = "folder", on = f_found },
+      { id = "all", w = 104, label = "Все", ic = "folder", on = not f_found and not f_missing },
+      { id = "missing", w = 210, label = "Только не найденные", ic = "warn", on = f_missing },
+      { id = "age", w = 200, label = has_dates and ("Возраст: " .. AGE_STEPS[f_age][2]) or "Возраст: нужен js_ReaScriptAPI",
+        enabled = has_dates, on = f_age > 1, dd = true },
     }
-    local right
-    if source == "recent" then
-      right = { { id = "all", w = 120, label = "Отметить все", enabled = #view > 0 },
-                { id = "none", w = 110, label = "Снять все" } }
-    else
-      right = { { id = "folders", w = 100, label = "Папки", color = show_settings and col.accent or nil } }
-    end
-    local gap, sum = 8, 0
-    for _, b in ipairs(specs) do sum = sum + b.w end
-    for _, b in ipairs(right) do sum = sum + b.w end
-    local gaps = (#specs - 1 + #right - 1 + 1) * gap -- плюс зазор между левой и правой группами
-    local k = math.max(0.5, math.min(1, (w - 32 - gaps) / sum)) -- в узком окне кнопки ужимаются
-    local clicked
-    local x = 16
+    local right = { { id = "all_check", w = 150, label = "Отметить все", ic = "check", enabled = #view > 0 },
+                    { id = "none", w = 130, label = "Снять все", ic = "x" } }
+    local sum, ngaps = 0, 0
+    for _, b in ipairs(specs) do sum = sum + b.w; ngaps = ngaps + 1 end
+    for _, b in ipairs(right) do sum = sum + b.w; ngaps = ngaps + 1 end
+    local k = math.max(0.5, math.min(1, (main_w - ngaps * gap) / sum)) -- в узком окне кнопки ужимаются
+    local x = main_x
     for _, b in ipairs(specs) do
       local bw = b.w * k
-      if draw_button(x, CHIP_Y, bw, CHIP_H, b.label, b.enabled ~= false, click, b.color, F_SMALL) then clicked = b.id end
+      if draw_button(x, G.chip_y, bw, G.chip_h, b.label, b.enabled ~= false, click, b.on and col.accent or nil, F_SMALL, b.ic) then
+        chip_click = b.id; chip_x = x
+      end
+      if b.dd then icon("chev", x + bw - 16, G.chip_y + G.chip_h / 2, 12, col.dim) end
       x = x + bw + gap
     end
-    x = w - 16
+    x = main_x + main_w
     for i = #right, 1, -1 do
       local b = right[i]
       local bw = b.w * k
       x = x - bw
-      if draw_button(x, CHIP_Y, bw, CHIP_H, b.label, b.enabled ~= false, click, b.color, F_SMALL) then clicked = b.id end
+      if draw_button(x, G.chip_y, bw, G.chip_h, b.label, b.enabled ~= false, click, nil, F_SMALL, b.ic) then chip_click = b.id end
       x = x - gap
-    end
-    if clicked == "recent" or clicked == "library" then set_source(clicked)
-    elseif clicked == "missing" then f_missing = not f_missing; after_filter_change()
-    elseif clicked == "age" then f_age = f_age % #AGE_STEPS + 1; after_filter_change()
-    elseif clicked == "all" then
-      for _, it in ipairs(view) do if not it.fav then it.checked = true end end -- избранные защищены
-    elseif clicked == "none" then
-      for _, it in ipairs(items) do it.checked = false end
-    elseif clicked == "folders" then
-      show_settings = not show_settings
-      edit = nil
     end
   end
 
-  -- панель проекта под курсором
+  -- ===== основная область: заголовки колонок =====
+  do
+    local all_checked = #view > 0
+    for _, it in ipairs(view) do if not it.checked then all_checked = false; break end end
+    set_color(col.panel); gfx.rect(main_x, G.cols_y, main_w, COLS_H, 1)
+    set_color(col.border); gfx.rect(main_x, list_y - 1, main_w, 1, 1)
+    draw_checkbox(cbx, G.cols_y + (COLS_H - CB) / 2, all_checked)
+    if click and not show_settings and mouse_in(cbx - 2, G.cols_y, CB + 4, COLS_H) then
+      if all_checked then
+        for _, it in ipairs(items) do it.checked = false end
+      else
+        for _, it in ipairs(view) do it.checked = true end
+      end
+    end
+    gfx.setfont(1, "Arial", F_SMALL)
+    local hy = G.cols_y + (COLS_H - F_SMALL) / 2 - 1
+    draw_text("Имя", L.name_x + 4, hy, col.dim)
+    if sort_key == "name" then
+      icon(sort_desc and "tri_down" or "tri_up", L.name_x + 4 + gfx.measurestr("Имя") + 14, G.cols_y + COLS_H / 2, 14, col.accent_text)
+    end
+    draw_text("Путь", L.path_x + 4, hy, col.dim)
+    if has_dates then draw_text("Дата", L.date_x + 4, hy, col.dim) end
+    draw_text("Размер", L.right - 2 - gfx.measurestr("Размер"), hy, col.dim)
+    for _, dv in ipairs(divs) do
+      local hot = (col_drag and col_drag.kind == dv.kind) or (not col_drag and mouse_in(dv.x - 4, G.cols_y, 9, COLS_H))
+      set_color(hot and col.accent or col.border)
+      gfx.rect(dv.x - (hot and 1 or 0), G.cols_y + 6, hot and 3 or 1, COLS_H - 12, 1)
+    end
+  end
+
+  -- ===== панель проекта под курсором (карточка) =====
   local act_fav, act_note, act_reveal
   do
-    set_color(col.panel); gfx.rect(0, info_y, w, INFO_H, 1)
-    set_color(col.border); gfx.rect(0, info_y, w, 1, 1)
+    rrect(main_x, info_y, main_w, INFO_H, 10, col.card)
+    rframe(main_x, info_y, main_w, INFO_H, 10, col.border)
     local it = cursor
     if not it then
       gfx.setfont(1, "Arial", F_SMALL)
-      draw_text("Проект не выбран.", 16, info_y + 12, col.dim)
+      draw_text("Проект не выбран.", main_x + 18, info_y + 16, col.dim)
     else
-      gfx.setfont(1, "Arial", F_ROW)
+      local tx = main_x + 64
+      rrect(main_x + 16, info_y + 14, 34, 42, 5, col.btn)
+      icon("doc", main_x + 33, info_y + 35, 26, col.accent_text)
+      gfx.setfont(1, "Arial", F_ROW + 2)
       local name = it.path:match("([^\\/]+)$") or it.path
-      draw_text(clip_head(name, text_w), 16, info_y + 8, it.exists and col.text or col.danger)
+      draw_text(clip_head(name, G.text_w), tx, info_y + 10, it.exists and col.text or col.danger)
 
       gfx.setfont(1, "Arial", F_SMALL)
       local line
@@ -1601,81 +1924,96 @@ local function draw()
         elseif inf.err then line = inf.err
         else line = info_text(inf) end
       end
-      draw_text(clip_head(line, text_w), 16, info_y + 33, col.dim)
+      draw_text(clip_head(line, G.text_w), tx, info_y + 38, col.dim)
 
       -- пометка: поле ввода (клик или F2 - редактировать)
-      draw_text("Пометка:", 16, note_y + (note_h - F_SMALL) / 2 - 1, col.dim)
+      local note_x, note_y, note_w, note_h = G.note_x, G.note_y, G.note_w, G.note_h
+      draw_text("Заметка:", tx, note_y + (note_h - F_SMALL) / 2 - 1, col.dim)
       local editing = edit and edit.it == it
-      set_color(col.bg); gfx.rect(note_x, note_y, note_w, note_h, 1)
-      set_color(editing and col.accent or col.border); gfx.rect(note_x, note_y, note_w, note_h, 0)
+      rrect(note_x, note_y, note_w, note_h, 6, col.bg)
+      rframe(note_x, note_y, note_w, note_h, 6, editing and col.accent or col.border)
       local ty = note_y + (note_h - F_SMALL) / 2 - 1
       if editing then
         local shown = clip_tail(edit.buf, note_w - 20)
-        draw_text(shown, note_x + 8, ty, col.text)
+        draw_text(shown, note_x + 10, ty, col.text)
         if math.floor(reaper.time_precise() * 2) % 2 == 0 then
           set_color(col.text)
-          gfx.rect(note_x + 8 + gfx.measurestr(shown) + 1, note_y + 4, 1, note_h - 8, 1)
+          gfx.rect(note_x + 10 + gfx.measurestr(shown) + 1, note_y + 5, 1, note_h - 10, 1)
         end
       elseif it.note ~= "" then
-        draw_text(clip_head(it.note, note_w - 20), note_x + 8, ty, col.tag)
+        local shown = clip_head(it.note, note_w - 34)
+        local tw = gfx.measurestr(shown)
+        rrect(note_x + 6, note_y + 4, tw + 16, note_h - 8, 5, col.tag_bg)
+        draw_text(shown, note_x + 14, ty, col.tag)
       else
-        draw_text("нет - клик или F2, чтобы добавить (Enter - сохранить)", note_x + 8, ty, col.dim)
+        draw_text(clip_head("нет - клик или F2, чтобы добавить (Enter - сохранить)", note_w - 24), note_x + 10, ty, col.dim)
       end
       if lclick and not edit and mouse_in(note_x, note_y, note_w, note_h) then start_edit() end
 
-      local bx = w - 16 - BTN_W
-      act_fav = draw_button(bx, info_y + 6, BTN_W, 24, it.fav and "★ Убрать из избранного" or "☆ В избранное",
-        true, lclick, nil, F_SMALL)
-      act_note = draw_button(bx, info_y + 33, BTN_W, 24, "Пометка (F2)", true, lclick, nil, F_SMALL)
-      act_reveal = draw_button(bx, info_y + 60, BTN_W, 24, "Показать в папке", it.exists, lclick, nil, F_SMALL)
+      local bx = main_x + main_w - 16 - BTN_W
+      act_fav = draw_button(bx, info_y + 8, BTN_W, 26, it.fav and "Убрать из избранного" or "В избранное",
+        true, lclick, nil, F_SMALL, it.fav and "star" or "star_o")
+      act_note = draw_button(bx, info_y + 38, BTN_W, 26, "Пометка (F2)", true, lclick, nil, F_SMALL, "doc")
+      act_reveal = draw_button(bx, info_y + 68, BTN_W, 26, "Показать в папке", it.exists, lclick, nil, F_SMALL, "folder")
     end
   end
 
-  -- окно «Папки»: закрывает список и панель проекта
+  -- ===== окно «Папки»: закрывает список и панель проекта =====
   local rm_dir, opt_click
   if show_settings then
-    set_color(col.bg); gfx.rect(0, HEAD_H, w, foot_y - HEAD_H, 1)
-    set_color(col.border); gfx.rect(0, HEAD_H, w, 1, 1)
-    gfx.setfont(1, "Arial", F_TITLE)
-    draw_text("Папки для поиска проектов", 16, HEAD_H + 12, col.text)
+    set_color(col.bg); gfx.rect(G.side_w, HEAD_H, w - G.side_w, foot_y - HEAD_H, 1)
+    gfx.setfont(2, "Arial", F_TITLE, "b")
+    draw_text("Папки для поиска проектов", main_x, HEAD_H + 14, col.text)
     gfx.setfont(1, "Arial", F_SMALL)
     draw_text("Проекты (.rpp) ищутся в этих папках и во всех вложенных. Файлы проектов не изменяются.",
-      16, HEAD_H + 42, col.dim)
+      main_x, HEAD_H + 46, col.dim)
     if #lib.dirs == 0 then
-      draw_text("Папок нет. Нажмите «Добавить папку…».", 16, SET_ROW_Y0 + 10, col.dim)
+      draw_text("Папок нет. Нажмите «Добавить папку…».", main_x, SET_ROW_Y0 + 10, col.dim)
     end
     for i, d in ipairs(lib.dirs) do
       local ry = SET_ROW_Y0 + (i - 1) * SET_ROW_H
       if ry + SET_ROW_H > foot_y - 100 then break end
-      if i % 2 == 0 then set_color(col.row_alt); gfx.rect(0, ry, w, SET_ROW_H, 1) end
+      if i % 2 == 0 then set_color(col.row_alt); gfx.rect(main_x, ry, main_w, SET_ROW_H, 1) end
       gfx.setfont(1, "Arial", F_ROW)
-      draw_text(clip_tail(d, w - 32 - 110), 16, ry + (SET_ROW_H - F_ROW) / 2 - 1, col.text)
-      if draw_button(w - 16 - 90, ry + 4, 90, 26, "Убрать", true, click, nil, F_SMALL) then rm_dir = i end
+      draw_text(clip_tail(d, main_w - 32 - 110), main_x + 8, ry + (SET_ROW_H - F_ROW) / 2 - 1, col.text)
+      if draw_button(main_x + main_w - 96, ry + 4, 90, 26, "Убрать", true, click, nil, F_SMALL) then rm_dir = i end
     end
     local options = {
       { key = "skip_backups", y = foot_y - 84, label = "Пропускать папки Backups (копии и автосохранения REAPER)" },
       { key = "with_bak", y = foot_y - 50, label = "Учитывать резервные копии .rpp-bak" },
     }
     for _, o in ipairs(options) do
-      draw_checkbox(16, o.y + 4, lib[o.key])
+      draw_checkbox(main_x + 4, o.y + 4, lib[o.key])
       gfx.setfont(1, "Arial", F_ROW)
-      draw_text(o.label, 46, o.y + 5, col.text)
-      if click and mouse_in(16, o.y, w - 32, 28) then opt_click = o.key end
+      draw_text(o.label, main_x + 36, o.y + 5, col.text)
+      if click and mouse_in(main_x, o.y, main_w, 28) then opt_click = o.key end
     end
   end
 
-  -- подвал
-  set_color(col.panel); gfx.rect(0, foot_y, w, FOOT_H, 1)
+  -- ===== подвал =====
+  set_color(col.bg); gfx.rect(0, foot_y, w, FOOT_H, 1)
   set_color(col.border); gfx.rect(0, foot_y, w, 1, 1)
+  set_color(col.panel); gfx.rect(0, foot_y + 1, G.side_w, FOOT_H - 1, 1)
+  set_color(col.border); gfx.rect(G.side_w - 1, foot_y, 1, FOOT_H, 1)
+
+  -- «Выбрано: N (размер)» под боковой панелью
+  local n_checked = count_checked()
+  do
+    local bytes = 0
+    for _, it in ipairs(view) do if it.checked and it.size then bytes = bytes + it.size end end
+    gfx.setfont(1, "Arial", F_SMALL)
+    local txt = n_checked > 0 and string.format("Выбрано: %d  (%s)", n_checked, fmt_size(bytes)) or "Ничего не выбрано"
+    draw_text(txt, 16, foot_y + 18, col.dim)
+  end
 
   -- галочка «Открывать в новой вкладке» - справа в строке статуса
-  local tab_w = 260
+  local tab_w = G.tab_w
+  local tx = main_x + main_w - tab_w
   if not show_settings then
-    local tx = w - 16 - tab_w
-    draw_checkbox(tx, foot_y + 6, open_new_tab)
+    draw_checkbox(tx, foot_y + 10, open_new_tab)
     gfx.setfont(1, "Arial", F_SMALL)
-    draw_text("Открывать в новой вкладке", tx + CB + 8, foot_y + 9, col.text)
-    if click and mouse_in(tx, foot_y + 4, tab_w, 26) then
+    draw_text("Открывать в новой вкладке", tx + CB + 8, foot_y + 13, col.text)
+    if click and mouse_in(tx, foot_y + 8, tab_w, 26) then
       open_new_tab = not open_new_tab
       reaper.SetExtState(EXT_SECTION, "open_new_tab", open_new_tab and "1" or "0", true)
       status = open_new_tab and "Проекты открываются в новой вкладке."
@@ -1684,38 +2022,29 @@ local function draw()
   end
 
   gfx.setfont(1, "Arial", F_SMALL)
-  draw_text(clip_tail(status, w - 32 - (show_settings and 0 or tab_w + 12)), 16, foot_y + 13, col.dim)
+  local status_text = status ~= "" and status or "Галочка - выбрать · двойной клик или Enter - открыть · F2 - пометка · Esc - очистить поиск"
+  draw_text((status ~= "" and clip_tail or clip_head)(status_text, main_w - (show_settings and 0 or tab_w + 12)), main_x, foot_y + 13, col.dim)
 
-  local bh, by, gap = 46, foot_y + 52, 10
+  local bh, by = G.bh, G.by
   local act_auto, act_open, act_del, act_undo, act_close, act_scan, act_add, act_back
   local multi_checked -- отмеченные проекты, если их два и больше (кнопка «Открыть отмеченные»)
   local target -- что откроет кнопка «Открыть»
   local scan_label = lib.scan and "Остановить сканирование" or "Пересканировать"
   local scan_enabled = lib.scan ~= nil or #lib.dirs > 0
+  local can_edit_list = (source == "recent") and not show_settings -- убирать записи можно только из списка Recent
   if show_settings then
-    local bw = (w - 32 - gap * 3) / 4
-    act_add = draw_button(16, by, bw, bh, "Добавить папку…", true, click, col.accent)
-    act_scan = draw_button(16 + (bw + gap), by, bw, bh, scan_label, scan_enabled, click)
-    act_back = draw_button(16 + (bw + gap) * 2, by, bw, bh, "Назад к списку", true, click)
-    act_close = draw_button(16 + (bw + gap) * 3, by, bw, bh, "Закрыть", true, click)
-  elseif source == "library" then
-    target = cursor
-    local bw = (w - 32 - gap * 2) / 3
-    act_scan = draw_button(16, by, bw, bh, scan_label, scan_enabled, click)
-    act_open = draw_button(16 + (bw + gap), by, bw, bh, "Открыть", target ~= nil and target.exists, click, col.accent)
-    act_close = draw_button(16 + (bw + gap) * 2, by, bw, bh, "Закрыть", true, click)
+    local bw = (main_w - gap * 3) / 4
+    act_add = draw_button(main_x, by, bw, bh, "Добавить папку…", true, click, col.accent, nil, "folder")
+    act_scan = draw_button(main_x + (bw + gap), by, bw, bh, scan_label, scan_enabled, click)
+    act_back = draw_button(main_x + (bw + gap) * 2, by, bw, bh, "Назад к списку", true, click)
+    act_close = draw_button(main_x + (bw + gap) * 3, by, bw, bh, "Закрыть", true, click, nil, nil, "x")
   else
-    local n_missing, n_checked = count_missing_unprotected(), count_checked()
-    -- «Открыть»: единственный отмеченный проект, а если отметок нет - проект под курсором
+    -- «Открыть»: единственный отмеченный проект, а если отметок нет - проект под курсором; два и больше - очередь
     if n_checked == 1 then
       for _, it in ipairs(view) do if it.checked then target = it end end
     elseif n_checked == 0 then
       target = cursor
     end
-    local last_undo = undo_stack[#undo_stack]
-    local bw = (w - 32 - gap * 4) / 5
-    act_auto = draw_button(16, by, bw, bh,
-      string.format("Убрать пропавшие (%d)", n_missing), n_missing > 0, click)
     multi_checked = {}
     for _, it in ipairs(view) do if it.checked then multi_checked[#multi_checked + 1] = it end end
     if #multi_checked < 2 then multi_checked = nil end
@@ -1727,13 +2056,66 @@ local function draw()
       for _, it in ipairs(multi_checked) do if it.exists then n_exist = n_exist + 1 end end
       open_label, open_enabled = string.format("Открыть отмеченные (%d)", #multi_checked), n_exist > 0
     end
-    act_open = draw_button(16 + (bw + gap), by, bw, bh, open_label, open_enabled, click, col.accent)
-    act_del = draw_button(16 + (bw + gap) * 2, by, bw, bh,
-      string.format("Удалить выбранные (%d)", n_checked), n_checked > 0, click, col.btn_danger)
-    act_undo = draw_button(16 + (bw + gap) * 3, by, bw, bh,
+    local last_undo = undo_stack[#undo_stack]
+    local n_missing = count_missing_unprotected()
+    act_auto = draw_button(14, by, G.side_w - 28, bh, string.format("Убрать пропавшие (%d)", n_missing),
+      can_edit_list and n_missing > 0, click, nil, F_SMALL + 1, "trash")
+    local avail = main_w - gap * 3
+    local w_open, w_del, w_undo = avail * 0.34, avail * 0.26, avail * 0.22
+    local w_close = avail - w_open - w_del - w_undo
+    act_open = draw_button(main_x, by, w_open, bh, open_label, open_enabled, click, col.accent, nil, open_queue and "x" or "play")
+    act_del = draw_button(main_x + w_open + gap, by, w_del, bh, string.format("Удалить выбранные (%d)", n_checked),
+      can_edit_list and n_checked > 0, click, col.btn_danger, F_SMALL + 1, "trash")
+    act_undo = draw_button(main_x + w_open + w_del + gap * 2, by, w_undo, bh,
       last_undo and string.format("Вернуть удалённые (%d)", #last_undo.removed) or "Вернуть удалённые",
-      last_undo ~= nil, click)
-    act_close = draw_button(16 + (bw + gap) * 4, by, bw, bh, "Закрыть", true, click)
+      last_undo ~= nil, click, nil, F_SMALL + 1, "undo")
+    act_close = draw_button(main_x + w_open + w_del + w_undo + gap * 3, by, w_close, bh, "Закрыть", true, click, nil, nil, "x")
+  end
+
+  -- ===== действия по кликам =====
+  if head_click then side_click = head_click end
+  if side_click then
+    if side_click == "folders" then
+      show_settings = not show_settings
+      edit = nil
+    elseif side_click == "library" or side_click == "favs" or side_click == "recent" then
+      set_source(side_click)
+    elseif side_click == "toggle_missing" then
+      f_missing = not f_missing; if f_missing then f_found = false end
+      after_filter_change()
+    elseif side_click == "dd_age" then
+      local labels = {}
+      for i, s in ipairs(AGE_STEPS) do labels[i] = (i == 1) and "Возраст: любой" or ("Возраст: " .. s[2]) end
+      local r = popup(labels, f_age, G.side_w, side_click_y)
+      if r then f_age = r; after_filter_change() end
+    elseif side_click == "dd_size" then
+      local labels = {}
+      for i, s in ipairs(SIZE_STEPS) do labels[i] = (i == 1) and "Размер: любой" or ("Размер: " .. s[2]) end
+      local r = popup(labels, f_size, G.side_w, side_click_y)
+      if r then f_size = r; after_filter_change() end
+    elseif side_click == "dd_date" then
+      local labels = {}
+      for i, s in ipairs(DATE_STEPS) do labels[i] = (i == 1) and "Дата: любая" or ("Дата: " .. s[2]) end
+      local r = popup(labels, f_date, G.side_w, side_click_y)
+      if r then f_date = r; after_filter_change() end
+    end
+  end
+  if chip_click then
+    if chip_click == "found" then f_found = not f_found; if f_found then f_missing = false end; after_filter_change()
+    elseif chip_click == "all" then f_found, f_missing = false, false; after_filter_change()
+    elseif chip_click == "missing" then f_missing = not f_missing; if f_missing then f_found = false end; after_filter_change()
+    elseif chip_click == "age" then
+      local labels = {}
+      for i, s in ipairs(AGE_STEPS) do labels[i] = (i == 1) and "Возраст: любой" or ("Возраст: " .. s[2]) end
+      local r = popup(labels, f_age, chip_x, G.chip_y + G.chip_h)
+      if r then f_age = r; after_filter_change() end
+    elseif chip_click == "all_check" then
+      for _, it in ipairs(view) do
+        if source ~= "recent" or not it.fav then it.checked = true end -- в Recent избранные защищены от массового удаления
+      end
+    elseif chip_click == "none" then
+      for _, it in ipairs(items) do it.checked = false end
+    end
   end
 
   if opt_click then
