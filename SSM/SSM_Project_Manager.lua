@@ -1,5 +1,5 @@
 -- @description SSM_Project_Manager
--- @version 3.7
+-- @version 3.8
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
@@ -58,6 +58,8 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.8 После «Открыть» (и после открытия всех отмеченных проектов) менеджер закрывается; отключается галочкой в «Настройках» (по умолчанию включена).
+--   Колонка «Путь» по умолчанию скрыта (включается там же).
 --   3.7 В «Настройках» (окно «Папки») галочки колонок списка: Имя, Путь, Дата, Размер. Выключенная колонка не рисуется, остаток строки забирает «Путь», а если он скрыт - «Имя»;
 --   выбор запоминается. Хотя бы одна из колонок «Имя» и «Путь» остаётся всегда.
 --   3.6.1 Ползунок списка дорожек в правой панели перетаскивается мышью (клик по дорожке переносит его), а не только листается колесом.
@@ -875,6 +877,11 @@ end
 -- Как открывать проект: в новой вкладке (по умолчанию) или в текущей
 local open_new_tab = reaper.GetExtState(EXT_SECTION, "open_new_tab") ~= "0"
 
+-- Закрывать менеджер после открытия проектов (галочка в «Настройках», по умолчанию включена).
+-- want_close ставится, когда проект (или вся очередь отмеченных) открыт; окно закрывает цикл loop().
+local close_after_open = reaper.GetExtState(EXT_SECTION, "close_after_open") ~= "0"
+local want_close = false
+
 -- Новая вкладка (действие 40859): текущий проект не трогается; "noprompt:" - без вопроса
 -- о сохранении пустой вкладки. В текущей вкладке имя без "noprompt:" - REAPER сам
 -- спросит, сохранить ли несохранённые изменения, ничего не потеряется молча.
@@ -889,6 +896,7 @@ local function open_project(it, force_tab)
     reaper.Main_openProject(it.path)
     status = "Открыт в текущей вкладке: " .. name
   end
+  if close_after_open then want_close = true end
 end
 
 -- Несколько отмеченных проектов открываются по очереди: по одному за кадр окна (окно не замирает, видно ход
@@ -927,7 +935,10 @@ local function open_queue_step()
   reaper.Main_OnCommand(40859, 0)
   reaper.Main_openProject("noprompt:" .. it.path)
   q.i = q.i + 1
-  if q.i > q.total then stop_open_queue("Готово") end
+  if q.i > q.total then
+    stop_open_queue("Готово")
+    if close_after_open then want_close = true end
+  end
 end
 
 -- Показывает файл проекта в проводнике / Finder
@@ -1104,7 +1115,10 @@ end
 -- Какие колонки показаны (галочки в «Настройках»); хранятся в настройках REAPER. Дата без js_ReaScriptAPI не показывается в любом случае.
 local COL_SHOW_KEYS = { "name", "path", "date", "size" }
 local col_show = {}
-for _, k in ipairs(COL_SHOW_KEYS) do col_show[k] = reaper.GetExtState(EXT_SECTION, "col_show_" .. k) ~= "0" end
+for _, k in ipairs(COL_SHOW_KEYS) do
+  local v = reaper.GetExtState(EXT_SECTION, "col_show_" .. k)
+  col_show[k] = (k == "path") and (v == "1") or (k ~= "path" and v ~= "0") -- «Путь» по умолчанию скрыт, остальные показаны
+end
 if not col_show.name and not col_show.path then col_show.name = true end -- хотя бы одна из «Имя» и «Путь» должна остаться
 
 -- Включить или выключить колонку. -> false, если выключить нельзя (последняя из «Имя» и «Путь»)
@@ -1550,7 +1564,8 @@ local function geometry(w, h)
   g.fil_dd_step, g.fil_dd_h = 40, 32
   -- подвал
   g.by, g.bh, g.gap = g.foot_y + 54, 48, 10
-  g.col_opt_y, g.col_opt_step = g.foot_y - 128, 150 -- окно «Папки»: ряд галочек «Колонки списка»; шаг по x
+  g.col_opt_y, g.col_opt_step = g.foot_y - 162, 150 -- окно «Папки»: ряд галочек «Колонки списка»; шаг по x
+  g.close_opt_y = g.foot_y - 118                   -- окно «Папки»: галочка «Закрывать менеджер после открытия»
   g.tab_w = g.rp_w - 2 * g.rp_pad
   return g
 end
@@ -2128,7 +2143,7 @@ local function draw()
   end
 
   -- ===== окно «Папки»: закрывает список и панель проекта =====
-  local rm_dir, opt_click, col_click
+  local rm_dir, opt_click, col_click, close_click
   if show_settings then
     set_color(col.bg); gfx.rect(G.side_w, HEAD_H, w - G.side_w, foot_y - HEAD_H, 1)
     gfx.setfont(2, "Arial", F_TITLE, "b")
@@ -2141,7 +2156,7 @@ local function draw()
     end
     for i, d in ipairs(lib.dirs) do
       local ry = SET_ROW_Y0 + (i - 1) * SET_ROW_H
-      if ry + SET_ROW_H > foot_y - 150 then break end
+      if ry + SET_ROW_H > foot_y - 184 then break end
       if i % 2 == 0 then set_color(col.row_alt); gfx.rect(main_x, ry, main_w, SET_ROW_H, 1) end
       gfx.setfont(1, "Arial", F_ROW)
       draw_text(clip_tail(d, main_w - 32 - 110), main_x + 8, ry + (SET_ROW_H - F_ROW) / 2 - 1, col.text)
@@ -2161,6 +2176,10 @@ local function draw()
       draw_text(label, cx + CB + 8, G.col_opt_y + 5, (k == "date" and not has_js_stat) and col.dim or col.text)
       if click and mouse_in(cx - 2, G.col_opt_y, math.min(G.col_opt_step - 6, 120), 28) then col_click = k end
     end
+    draw_checkbox(main_x + 4, G.close_opt_y + 4, close_after_open)
+    gfx.setfont(1, "Arial", F_ROW)
+    draw_text("Закрывать менеджер после открытия проектов", main_x + 36, G.close_opt_y + 5, col.text)
+    if click and mouse_in(main_x, G.close_opt_y, main_w, 28) then close_click = true end
     local options = {
       { key = "skip_backups", y = foot_y - 84, label = "Пропускать папки Backups (копии и автосохранения REAPER)" },
       { key = "with_bak", y = foot_y - 50, label = "Учитывать резервные копии .rpp-bak" },
@@ -2305,6 +2324,10 @@ local function draw()
 
   if col_click then
     if not toggle_col(col_click) then status = "Нужна хотя бы одна из колонок «Имя» или «Путь»." end
+  elseif close_click then
+    close_after_open = not close_after_open
+    reaper.SetExtState(EXT_SECTION, "close_after_open", close_after_open and "1" or "0", true)
+    status = close_after_open and "Менеджер закроется после открытия проектов." or "Менеджер останется открытым после открытия проектов."
   elseif opt_click then
     lib[opt_click] = not lib[opt_click]
     lib.save_settings()
@@ -2393,7 +2416,7 @@ local function loop()
     reaper.SetExtState(EXT_SECTION, "win_w", tostring(math.floor(saved_w)), true)
     reaper.SetExtState(EXT_SECTION, "win_h", tostring(math.floor(saved_h)), true)
   end
-  if draw() == "close" then gfx.quit(); return end
+  if draw() == "close" or want_close then gfx.quit(); return end
   gfx.update()
   reaper.defer(loop)
 end
