@@ -1,5 +1,5 @@
 -- @description SSM_AI_Drummer
--- @version 1.8
+-- @version 1.9
 -- @author @ssm_metalmix
 -- @about
 --   🥁 Барабанная MIDI-партия под гитарный DI-риф: нейросеть или словарь тактов барабанщика.
@@ -10,6 +10,8 @@
 --   Скрипт - только окно: партию сочиняет движок AI Drummer (Python), ноты рифа находит модуль детектора
 --   SSM_DI_Detector. Движок и модуль не публикуются: без них скрипт не работает (путь к движку - кнопка «Путь…»).
 -- @changelog
+--   1.9 Вкладка «Гуманизация»: применить только гуманизацию (SSM Humanizer, уровни силы и тайминга) к выделенным MIDI-item,
+--   без генерации партии. Отмена - одним шагом.
 --   1.8 Карта барабанов GGD Modern & Massive: в «Карте барабанов на выходе» и в «Конвертере карт».
 --   1.7 Карта барабанов Counterkit (плагин с пресетом Counterkit): в «Карте барабанов на выходе» и в «Конвертере карт».
 --   1.6 Гуманизация: тайминг High 1.4 (как у живых барабанщиков; было 1.0). ИИ: ползунок «Бочка: как у барабанщика ->
@@ -74,7 +76,8 @@ local CONVERT_MAPS = {
   { label = "Counterkit", key = "counterkit" },    -- в конце: номера прежних кнопок в настройках не сдвигаются
   { label = "GGD Modern & Massive", key = "ggd_modern_massive" },
 }
-local VIEWS = { { label = "Партия", key = "drummer" }, { label = "Конвертер карт", key = "convert" } }
+local VIEWS = { { label = "Партия", key = "drummer" }, { label = "Конвертер карт", key = "convert" }, { label = "Гуманизация", key = "humanize" } }
+local VIEWS_W = 450          -- ширина ряда вкладок в заголовке (справа)
 -- движок: словарь тактов барабанщика или нейросеть (ai/ в движке)
 local ENGINES = {
   { label = "Словарь", key = "dictionary" },
@@ -173,6 +176,7 @@ local S = {
   focus = load_num("focus", 1) == 1,
   follow = clamp(load_num("follow", 0.5), 0, 1),
   view_idx = clamp(math.floor(load_num("view_idx", 1)), 1, #VIEWS),
+  hum_map_idx = clamp(math.floor(load_num("hum_map_idx", 1)), 1, #CONVERT_MAPS),   -- карта нот гуманизируемого MIDI (по умолчанию GM)
   conv_from_idx = clamp(math.floor(load_num("conv_from_idx", 2)), 1, #CONVERT_MAPS),
   conv_to_idx = clamp(math.floor(load_num("conv_to_idx", 1)), 1, #CONVERT_MAPS),
   win_x = load_num("win_x", 200),
@@ -215,6 +219,7 @@ local function save_settings()
   put("focus", S.focus and 1 or 0)
   put("follow", string.format("%.2f", S.follow))
   put("view_idx", S.view_idx)
+  put("hum_map_idx", S.hum_map_idx)
   put("conv_from_idx", S.conv_from_idx)
   put("conv_to_idx", S.conv_to_idx)
   put("win_x", math.floor(S.win_x))
@@ -825,6 +830,153 @@ local function poll_conversion()
 end
 
 ----------------------------------------------------------------------
+-- ГУМАНИЗАЦИЯ ВЫДЕЛЕННЫХ MIDI-ITEM (без генерации партии)
+----------------------------------------------------------------------
+-- Ноты item (время, нота, сила, длина -- в секундах от начала item) уходят в движок (tools\humanize_items.py), он гоняет хьюманизер
+-- (как бот: те же уровни, seed 12345) и возвращает новое время начала, ноту (левая нога бочки) и силу. Окно меняет только их;
+-- длина нот остаётся. Темп и размер -- в начале каждого item (как у генерации); смена темпа внутри item -- предупреждение.
+-- Одна отмена (Ctrl+Z) на всё. Повторный запуск гуманизирует ещё раз -- по уже сдвинутым нотам.
+local hum = nil           -- идущий запрос: { out, started, items = { { item, take, name, n } } }
+local last_hum = nil      -- итог последней гуманизации -- для статуса вкладки
+
+local function humanize_item_job(e)
+  local item, take = e.item, e.take
+  local pos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+  local len = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+  local num, den, bpm = reaper.TimeMap_GetTimeSigAtTime(0, pos)
+  local _, measures = reaper.TimeMap2_timeToBeats(0, pos)
+  local fd = reaper.TimeMap2_beatsToTime(0, 0, measures) - pos          -- начало такта относительно начала item (<= 0)
+  local tempo_change = false
+  for i = 0, reaper.CountTempoTimeSigMarkers(0) - 1 do
+    local _, tpos = reaper.GetTempoTimeSigMarker(0, i)
+    if tpos > pos + 1e-6 and tpos < pos + len - 1e-6 then tempo_change = true end
+  end
+  local _, cnt = reaper.MIDI_CountEvts(take)
+  local notes, snap = {}, {}
+  for i = 0, cnt - 1 do
+    local _, _, _, sp, ep, _, pitch, vel = reaper.MIDI_GetNote(take, i)
+    local t0 = reaper.MIDI_GetProjTimeFromPPQPos(take, sp) - pos
+    local t1 = reaper.MIDI_GetProjTimeFromPPQPos(take, ep) - pos
+    notes[#notes + 1] = { t0, pitch, vel, math.max(0.001, t1 - t0) }
+    snap[#snap + 1] = { sp = sp, ep = ep }
+  end
+  e.n, e.pos, e.snap = cnt, pos, snap
+  return { bpm = bpm, meter = { num, den }, first_downbeat = fd, notes = notes }, tempo_change
+end
+
+local function apply_humanize(items, res)
+  local done, notes_total, moved_sum, moved_n, vel_changed, pitch_changed = 0, 0, 0, 0, 0, 0
+  local errors, tempo_warn = {}, false
+  reaper.Undo_BeginBlock()
+  reaper.PreventUIRefresh(1)
+  for k, e in ipairs(items) do
+    local r = res.items and res.items[e.slot + 1]
+    if not r or not r.ok then
+      errors[#errors + 1] = (e.name ~= "" and e.name or "(без имени)") .. ": " .. tostring(r and r.error or "нет ответа")
+    elseif not (reaper.ValidatePtr(e.item, "MediaItem*") and reaper.ValidatePtr(e.take, "MediaItem_Take*")) then
+      errors[#errors + 1] = (e.name ~= "" and e.name or "(без имени)") .. ": item удалён, пока шла гуманизация"
+    else
+      local _, cnt = reaper.MIDI_CountEvts(e.take)
+      if cnt ~= e.n then
+        errors[#errors + 1] = (e.name ~= "" and e.name or "(без имени)") .. ": ноты изменились, пока шла гуманизация - пропущен"
+      else
+        for _, nr in ipairs(r.notes) do
+          local i, t_new, pitch, vel = math.floor(nr[1]), nr[2], math.floor(nr[3]), math.floor(nr[4])
+          local sn = e.snap[i + 1]
+          local old_len_ppq = sn.ep - sn.sp
+          if t_new < 0 then t_new = 0 end                                -- нота не уходит левее начала item
+          local sp = reaper.MIDI_GetPPQPosFromProjTime(e.take, e.pos + t_new)
+          reaper.MIDI_SetNote(e.take, i, nil, nil, sp, sp + old_len_ppq, nil, pitch, vel, true)
+        end
+        reaper.MIDI_Sort(e.take)
+        done = done + 1
+        notes_total = notes_total + #r.notes
+        local st = r.stats or {}
+        moved_sum = moved_sum + (st.mean_move_ms or 0) * #r.notes
+        moved_n = moved_n + #r.notes
+        vel_changed = vel_changed + (st.velocity_changed or 0)
+        pitch_changed = pitch_changed + (st.pitch_changed or 0)
+      end
+    end
+    if e.tempo_change then tempo_warn = true end
+  end
+  reaper.PreventUIRefresh(-1)
+  reaper.UpdateArrange()
+  reaper.Undo_EndBlock("SSM AI Drummer: гуманизация MIDI", -1)
+  return { items = done, notes = notes_total, mean_ms = moved_n > 0 and moved_sum / moved_n or 0, vel = vel_changed,
+           pitch = pitch_changed, errors = errors, tempo_warn = tempo_warn }
+end
+
+local function finish_humanize(items, res)
+  if type(res) ~= "table" or not res.ok then
+    last_hum = nil
+    last_status = { kind = "error", text = "Гуманизация: " .. tostring(type(res) == "table" and res.error or res) }
+    return
+  end
+  local r = apply_humanize(items, res)
+  last_hum = r
+  local text = string.format("Готово: item %d, нот %d; средний сдвиг %.1f мс, сила изменена у %d нот", r.items, r.notes, r.mean_ms, r.vel)
+  if r.pitch > 0 then text = text .. string.format(", левая нога бочки (нота ниже): %d", r.pitch) end
+  if r.tempo_warn then text = text .. ".  ⚠ Внутри item меняется темп: взят темп в его начале" end
+  if #r.errors > 0 then text = text .. ".  ⚠ " .. table.concat(r.errors, "; ") end
+  last_status = { kind = (#r.errors > 0 or r.tempo_warn) and "info" or "ok", text = text }
+end
+
+local function start_humanize()
+  local items, other = selected_midi_items()
+  if #items == 0 then
+    last_status = { kind = "error", text = other > 0 and "Выделенные item - не MIDI." or "Выделите MIDI-item с барабанами (один или несколько)." }
+    return false
+  end
+  local edir = tostring(engine_path() or ""):match("^(.*)[\\/][^\\/]*$") or "."
+  local tool = edir .. "\\tools\\humanize_items.py"
+  if not file_exists(tool) then
+    last_status = { kind = "error", text = "Нет " .. tool .. " (движок старый или путь не тот: кнопка «Путь…»)" }
+    return false
+  end
+  local job_items, sent, tempo_any = {}, {}, false
+  for _, e in ipairs(items) do
+    local ji, tc = humanize_item_job(e)
+    e.tempo_change = tc
+    if tc then tempo_any = true end
+    if #ji.notes > 0 then
+      job_items[#job_items + 1] = ji
+      e.slot = #job_items - 1                                           -- номер в ответе движка (с нуля)
+      sent[#sent + 1] = e
+    end
+  end
+  if #sent == 0 then
+    last_status = { kind = "error", text = "В выделенных item нет нот." }
+    return false
+  end
+  local dir = string.format("%s/humanize_%s_%04d", job_root(), os.date("%Y%m%d_%H%M%S"), math.random(0, 9999))
+  make_dir(dir)
+  local job_path, out = dir .. "/job.json", dir .. "/result.json"
+  write_file(job_path, json_encode({ map = CONVERT_MAPS[S.hum_map_idx].key, timing = HUM_TIME_LEVELS[S.hum_time_idx].key,
+    velocity = HUM_VEL_LEVELS[S.hum_vel_idx].key, seed = 12345, items = job_items }))
+  local cmd = quote(S.python) .. " " .. quote(tool) .. " --job " .. quote(job_path) .. " --out " .. quote(out)
+  reaper.ExecProcess(cmd, -1)   -- в фоне: Python загружает хьюманизер, ~2-5 с на item
+  hum = { out = out, started = reaper.time_precise(), items = sent, tempo_any = tempo_any }
+  last_status = { kind = "info", text = "Гуманизация запущена…" }
+  return true
+end
+
+local function poll_humanize()
+  if not hum then return end
+  if not file_exists(hum.out) then
+    if reaper.time_precise() - hum.started > 60 + 15 * #hum.items then
+      hum = nil
+      last_status = { kind = "error", text = "Гуманизация: движок не ответил вовремя (проверьте «Python…» и «Путь…»)." }
+    end
+    return
+  end
+  local h = hum
+  hum = nil
+  local ok, res = pcall(json_decode, read_file(h.out) or "")
+  finish_humanize(h.items, ok and res or ("не удалось прочитать ответ: " .. tostring(res)))
+end
+
+----------------------------------------------------------------------
 -- GUI (оформление как у SSM_DI_Guitar_Align)
 ----------------------------------------------------------------------
 local win_x, win_y = S.win_x, S.win_y
@@ -990,7 +1142,7 @@ local function draw_window()
   draw_round_rect(0, 0, w, h, col.bg, 1, 0)
 
   -- заголовок (перетаскивается)
-  local in_header = gfx.mouse_y >= 0 and gfx.mouse_y <= HEADER_H and gfx.mouse_x < w - 18 - 330  -- справа вкладки
+  local in_header = gfx.mouse_y >= 0 and gfx.mouse_y <= HEADER_H and gfx.mouse_x < w - 18 - VIEWS_W  -- справа вкладки
   if left_click and in_header then
     dragging = true
     local sx, sy = reaper.GetMousePosition()
@@ -1013,7 +1165,7 @@ local function draw_window()
   draw_text("🥁 SSM AI Drummer v1.6", 18, 15, col.text)
   -- своего крестика нет: окно закрывается средствами REAPER (Esc, рамка окна, список действий)
   -- вкладки: партия (генерация) / конвертер карт
-  local vc = draw_chip_row(w - 18 - 330, 10, 330, 28, VIEWS, S.view_idx, left_click and not dragging, true)
+  local vc = draw_chip_row(w - 18 - VIEWS_W, 10, VIEWS_W, 28, VIEWS, S.view_idx, left_click and not dragging, true)
   if vc then S.view_idx = vc; save_settings() end
 
   if VIEWS[S.view_idx].key == "convert" then
@@ -1061,6 +1213,70 @@ local function draw_window()
     for _, ln in ipairs({
       "Меняется только номер ноты: время, длина и сила удара остаются. Отмена - Ctrl+Z (одним шагом).",
       "Соответствие инструментов - из SSM Humanizer (как в боте). Нота не из исходной карты остаётся как есть.",
+    }) do
+      draw_text(clip_text(ln, fw, 13), pad, y, col.text_dim)
+      y = y + 18
+    end
+    y = y + 10
+    if last_status then
+      local cc = last_status.kind == "error" and col.err or (last_status.kind == "ok" and col.accent2 or col.text_dim)
+      gfx.setfont(1, "Arial", 14)
+      for i, ln in ipairs(wrap_text(last_status.text, fw, 14)) do
+        if i > 6 then break end
+        draw_text(ln, pad, y + (i - 1) * 18, cc)
+      end
+    end
+    last_mouse_cap = gfx.mouse_cap
+    return action
+  end
+
+  if VIEWS[S.view_idx].key == "humanize" then
+    local pad = 18
+    local fw = w - 2 * pad
+    local y = HEADER_H + 14
+    local hbusy = hum ~= nil
+    local items, other = selected_midi_items()
+    draw_round_rect(pad, y, fw, 150, col.panel, 1, 8)
+    gfx.setfont(1, "Arial", 15)
+    draw_text(string.format("Выделено MIDI-item: %d%s", #items, other > 0 and ("  (не MIDI - пропускаются: " .. other .. ")") or ""),
+      pad + 10, y + 8, #items > 0 and col.text or col.warn)
+    gfx.setfont(1, "Arial", 13)
+    for i, e in ipairs(items) do
+      if i > 5 then draw_text("… и ещё " .. (#items - 5), pad + 22, y + 32 + 5 * 20, col.text_dim); break end
+      draw_text(clip_text(e.name ~= "" and e.name or "(без имени)", fw - 40, 13), pad + 22, y + 32 + (i - 1) * 20, col.text_dim)
+    end
+    if #items == 0 then draw_text("Выделите в проекте один или несколько MIDI-item с барабанами.", pad + 22, y + 34, col.text_dim) end
+    y = y + 164
+
+    gfx.setfont(1, "Arial", 15)
+    draw_text("Карта нот этого MIDI (под какой плагин записан):", pad, y, col.text)
+    local mc = draw_chip_row(pad, y + 22, fw, 30, CONVERT_MAPS, S.hum_map_idx, left_click and not hbusy, not hbusy)
+    if mc then S.hum_map_idx = mc; save_settings() end
+    y = y + 66
+    gfx.setfont(1, "Arial", 14)
+    draw_text("Сила удара:", pad, y + 5, col.text)
+    local hv = draw_chip_row(pad + 130, y, fw - 130, 26, HUM_VEL_LEVELS, S.hum_vel_idx, left_click and not hbusy, not hbusy)
+    if hv then S.hum_vel_idx = hv; save_settings() end
+    y = y + 34
+    gfx.setfont(1, "Arial", 14)
+    draw_text("Тайминг:", pad, y + 5, col.text)
+    local ht = draw_chip_row(pad + 130, y, fw - 130, 26, HUM_TIME_LEVELS, S.hum_time_idx, left_click and not hbusy, not hbusy)
+    if ht then S.hum_time_idx = ht; save_settings() end
+    y = y + 44
+
+    if hbusy then
+      draw_button(pad, y, fw, 40, string.format("%.0f с — гуманизирую…", reaper.time_precise() - hum.started), false, false)
+    else
+      if draw_button(pad, y, fw, 40, "🎚 Гуманизировать выделенные MIDI-item", #items > 0, left_click, col.btn_start) then
+        action = "humanize"
+      end
+    end
+    y = y + 52
+    gfx.setfont(1, "Arial", 13)
+    for _, ln in ipairs({
+      "Меняется время начала, сила и (у быстрой двойной бочки) нота левой ноги; длина нот остаётся. Отмена - Ctrl+Z (одним шагом).",
+      "Тот же SSM Humanizer и те же уровни, что в боте. Темп и размер берутся в начале каждого item.",
+      "Повторный запуск гуманизирует ещё раз - уже по сдвинутым нотам: чтобы начать заново, отмените (Ctrl+Z).",
     }) do
       draw_text(clip_text(ln, fw, 13), pad, y, col.text_dim)
       y = y + 18
@@ -1422,6 +1638,11 @@ local function main_loop()
     job = nil
     last_status = { kind = "error", text = "Ошибка вставки партии: " .. tostring(perr) }
   end
+  local okh, herr = pcall(poll_humanize)
+  if not okh then
+    hum = nil
+    last_status = { kind = "error", text = "Ошибка гуманизации: " .. tostring(herr) }
+  end
   local okc, cerr = pcall(poll_conversion)
   if not okc then
     conv = nil
@@ -1444,6 +1665,7 @@ local function main_loop()
   if action == "generate" then start_generation(false) end
   if action == "variant" then start_generation(true) end
   if action == "convert" then start_conversion() end
+  if action == "humanize" then start_humanize() end
   if action == "open_cache" then
     local dir = cache_dir()
     make_dir(dir)
@@ -1472,6 +1694,7 @@ if SSM_AI_DRUMMER_LIBRARY then
     PART_MODES = PART_MODES, json_encode = json_encode, json_decode = json_decode, read_notes_csv = read_notes_csv,
     CONVERT_MAPS = CONVERT_MAPS, VIEWS = VIEWS, start_conversion = start_conversion, poll_conversion = poll_conversion,
     is_converting = function() return conv ~= nil end, selected_midi_items = selected_midi_items,
+    start_humanize = start_humanize, poll_humanize = poll_humanize, is_humanizing = function() return hum ~= nil end,
     project_root = project_root, engine_path = engine_path,
   }
 end
