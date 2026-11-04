@@ -1,5 +1,5 @@
 -- @description SSM_Project_Manager
--- @version 3.9
+-- @version 3.10
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
@@ -58,6 +58,8 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.10 Украшения: градиентный фон, свечение вокруг активных элементов и главных кнопок, эквалайзер в боковой панели; отключаются галочкой в «Настройках» (по умолчанию включены).
+--   В шапке две кнопки RU / EN - язык окна переключается на лету.
 --   3.9 Две галочки в «Настройках» (по умолчанию включены): после открытия проекта удалять события MIDI Program Change во всех MIDI-айтемах и переводить все MIDI-ноты в канал 1.
 --   3.8 После «Открыть» (и после открытия всех отмеченных проектов) менеджер закрывается; отключается галочкой в «Настройках» (по умолчанию включена).
 --   Колонка «Путь» по умолчанию скрыта (включается там же).
@@ -149,6 +151,148 @@ local col = {
   btn = { 0.095, 0.130, 0.190 }, btn_hover = { 0.135, 0.185, 0.270 }, btn_off = { 0.070, 0.095, 0.138 },
   btn_danger = { 0.50, 0.17, 0.20 }, star = { 1.0, 0.80, 0.25 }, tag = { 0.55, 0.75, 1.0 }, tag_bg = { 0.075, 0.155, 0.285 },
 }
+
+----------------------------------------------------------------------
+-- Язык окна: русский (по умолчанию) или английский, переключается кнопками RU / EN в шапке на лету.
+-- Тексты в коде русские; при показе tr() подставляет английский: сначала точное совпадение, потом шаблоны
+-- ({} - любой текст, {d} - число; захваты переводятся рекурсивно), потом перевод по частям, разделённым « · ».
+-- Не найденное (имена проектов, пути) остаётся как есть.
+----------------------------------------------------------------------
+local lang = reaper.GetExtState(EXT_SECTION, "lang") == "en" and "en" or "ru"
+
+local EN_EXACT = {
+  ["Проекты"] = "Projects", ["Избранное"] = "Favorites", ["Недавние"] = "Recent", ["Настройки"] = "Settings",
+  ["Все проекты"] = "All projects", ["Папки"] = "Folders", ["Папка"] = "Folder", ["Фильтры"] = "Filters",
+  ["Как в REAPER"] = "As in REAPER", ["Как найдено"] = "As found", ["Имя"] = "Name", ["Дата"] = "Date", ["Размер"] = "Size",
+  ["Путь"] = "Path", ["Не найденные"] = "Missing", ["Найденные"] = "Found", ["Все"] = "All",
+  ["Только не найденные"] = "Only missing", ["Отметить все"] = "Select all", ["Снять все"] = "Clear all",
+  ["Возраст"] = "Age", ["любой"] = "any", ["любая"] = "any", ["старше 3 мес."] = "older than 3 mo.", ["старше 6 мес."] = "older than 6 mo.",
+  ["старше 1 года"] = "older than 1 year", ["старше 2 лет"] = "older than 2 years", ["до 1 МБ"] = "up to 1 MB", ["1-10 МБ"] = "1-10 MB",
+  ["больше 10 МБ"] = "over 10 MB", ["за сутки"] = "last day", ["за 7 дней"] = "last 7 days", ["за 30 дней"] = "last 30 days", ["за год"] = "last year",
+  ["Возраст: нужен js_ReaScriptAPI"] = "Age: js_ReaScriptAPI required", ["Дата изменения: нужен js_ReaScriptAPI"] = "Modified date: js_ReaScriptAPI required",
+  ["Поиск по имени, пути и заметкам…"] = "Search by name, path and notes…", ["не найден"] = "missing",
+  ["Ничего не выбрано"] = "Nothing selected", ["Открывать в новой вкладке"] = "Open in a new tab",
+  ["Галочка - выбрать · двойной клик или Enter - открыть · F2 - пометка · Esc - очистить поиск"] = "Checkbox - select · double-click or Enter - open · F2 - note · Esc - clear search",
+  ["Открыть"] = "Open", ["Новая вкладка"] = "New tab", ["Из избранного"] = "Unfavorite", ["В избранное"] = "Add to favorites",
+  ["Заметка (F2)"] = "Note (F2)", ["Закрыть"] = "Close", ["Вернуть удалённые"] = "Restore removed", ["Убрать"] = "Remove",
+  ["Добавить папку…"] = "Add folder…", ["Остановить сканирование"] = "Stop scanning", ["Пересканировать"] = "Rescan", ["Назад к списку"] = "Back to list",
+  ["Папки для поиска проектов"] = "Folders to search for projects",
+  ["Проекты (.rpp) ищутся в этих папках и во всех вложенных. Файлы проектов не изменяются."] = "Projects (.rpp) are searched for in these folders and all subfolders. Project files are not modified.",
+  ["Папок нет. Нажмите «Добавить папку…»."] = "No folders. Click “Add folder…”.",
+  ["Колонки списка проектов (хотя бы «Имя» или «Путь» остаётся):"] = "Project list columns (at least “Name” or “Path” stays):",
+  ["Закрывать менеджер после открытия проектов"] = "Close the manager after opening projects",
+  ["Fix MIDI Program Change: при открытии проекта удалять события Program Change во всех MIDI-айтемах"] = "Fix MIDI Program Change: delete Program Change events in all MIDI items when a project opens",
+  ["MIDI-ноты в канал 1: при открытии проекта переводить все MIDI-ноты в первый канал"] = "MIDI notes to channel 1: move all MIDI notes to the first channel when a project opens",
+  ["Украшения интерфейса (свечение, фон, эквалайзер)"] = "Interface decorations (glow, background, equalizer)",
+  ["Пропускать папки Backups (копии и автосохранения REAPER)"] = "Skip Backups folders (REAPER copies and autosaves)",
+  ["Учитывать резервные копии .rpp-bak"] = "Include .rpp-bak backup copies",
+  ["Проект не выбран."] = "No project selected.", ["Файл не найден."] = "File not found.", ["Читаю проект…"] = "Reading project…",
+  ["Плагинов нет"] = "No plugins", ["ЗАМЕТКА"] = "NOTE", ["клик или F2 - добавить (Enter - сохранить)"] = "click or F2 - add (Enter - save)",
+  ["Готово"] = "Done", ["Остановлено"] = "Stopped",
+  -- сообщения
+  ["Сначала добавьте папку с проектами (кнопка «Папки»)."] = "Add a projects folder first (the “Folders” button).",
+  ["Сканирование…"] = "Scanning…", ["Идёт сканирование…"] = "Scanning…",
+  ["Сканирование остановлено, список не изменён."] = "Scan stopped, the list is unchanged.",
+  ["Эта папка уже в списке."] = "This folder is already in the list.", ["Нечего удалять."] = "Nothing to delete.",
+  ["Не удалось создать резервную копию reaper.ini - ничего не изменено."] = "Could not back up reaper.ini - nothing changed.",
+  ["Не удалось записать reaper.ini - ничего не изменено."] = "Could not write reaper.ini - nothing changed.",
+  ["Отмеченные проекты не найдены на диске - открывать нечего."] = "Checked projects not found on disk - nothing to open.",
+  ["Открытие отменено."] = "Opening cancelled.", ["Файл не найден - показывать нечего."] = "File not found - nothing to show.",
+  ["В пути есть кавычка - не могу открыть папку."] = "The path contains a quote - cannot open the folder.",
+  ["Пометка удалена."] = "Note deleted.", ["Пометка сохранена."] = "Note saved.",
+  ["Нужна хотя бы одна из колонок «Имя» или «Путь»."] = "At least one of the “Name” or “Path” columns is required.",
+  ["Включено: правка MIDI при открытии проектов."] = "Enabled: MIDI fix when opening projects.",
+  ["Выключено: правка MIDI при открытии проектов."] = "Disabled: MIDI fix when opening projects.",
+  ["Менеджер закроется после открытия проектов."] = "The manager will close after opening projects.",
+  ["Менеджер останется открытым после открытия проектов."] = "The manager will stay open after opening projects.",
+  ["Украшения включены."] = "Decorations enabled.", ["Украшения выключены."] = "Decorations disabled.",
+  ["Настройка применится при следующем сканировании."] = "The setting applies at the next scan.",
+  ["Удаление отменено."] = "Deletion cancelled.",
+  ["Проекты открываются в новой вкладке."] = "Projects open in a new tab.",
+  ["Проекты открываются в текущей вкладке: REAPER спросит о сохранении."] = "Projects open in the current tab: REAPER will ask about saving.",
+  ["Список Recent projects пуст."] = "The Recent projects list is empty.",
+  ["В избранном пока ничего нет: нажмите звезду у проекта."] = "No favorites yet: click the star on a project.",
+  ["Папки не заданы. Нажмите «Папки» и добавьте папку с проектами."] = "No folders set. Click “Folders” and add a projects folder.",
+  ["Список пуст. Нажмите «Пересканировать»."] = "The list is empty. Click “Rescan”.",
+  ["Ничего не найдено. Измените поиск или фильтры."] = "Nothing found. Change the search or filters.",
+  ["Папка с проектами"] = "Projects folder",
+}
+
+-- порядок важен: частные шаблоны раньше общих
+local EN_PATTERNS = {
+  { "{} (нужен js_ReaScriptAPI)", "{} (js_ReaScriptAPI required)" },
+  { "{}: нужен js_ReaScriptAPI", "{}: js_ReaScriptAPI required" },
+  { "Возраст: {}", "Age: {}" }, { "Размер: {}", "Size: {}" }, { "Дата: {}", "Date: {}" },
+  { "Возраст ({})", "Age ({})" }, { "Размер ({})", "Size ({})" }, { "Дата ({})", "Date ({})" },
+  { "{} Б", "{} B" }, { "{} КБ", "{} KB" }, { "{} МБ", "{} MB" }, { "{} кГц", "{} kHz" }, { "{} Гц", "{} Hz" },
+  { "(не найдено: {d})", "(missing: {d})" }, { "(найдено {d} из {d}, не найдено: {d})", "(found {d} of {d}, missing: {d})" },
+  { "Выбрано: {d}  ({})", "Selected: {d}  ({})" },
+  { "ТРЕКОВ {d}", "TRACKS {d}" }, { "ПЛАГИНЫ {d}", "PLUGINS {d}" }, { "Дорожка {d}", "Track {d}" },
+  { "Открыть отмеченные ({d})", "Open checked ({d})" }, { "Остановить (осталось {d})", "Stop ({d} left)" },
+  { "Убрать пропавшие ({d})", "Remove missing ({d})" }, { "Удалить выбранные ({d})", "Delete selected ({d})" },
+  { "Вернуть удалённые ({d})", "Restore removed ({d})" },
+  { "Найдено проектов: {d} (папок просмотрено: {d}).", "Projects found: {d} (folders scanned: {d})." },
+  { "Сканирование… найдено проектов: {d}, папок просмотрено: {d}", "Scanning… projects found: {d}, folders scanned: {d}" },
+  { "Папка не найдена: {}", "Folder not found: {}" }, { "Папка убрана из списка: {}", "Folder removed from the list: {}" },
+  { "Удалено из списка: {d}. Осталось: {d}. Кнопка «Вернуть удалённые» отменит удаление.",
+    "Removed from the list: {d}. Left: {d}. The “Restore removed” button undoes it." },
+  { "Возвращено в список: {d}. Меню REAPER обновится после перезапуска.", "Restored to the list: {d}. The REAPER menu updates after a restart." },
+  { "MIDI: Program Change удалено {d}, нот переведено в канал 1: {d}", "MIDI: Program Change removed {d}, notes moved to channel 1: {d}" },
+  { "Открыт в новой вкладке: {}", "Opened in a new tab: {}" }, { "Открыт в текущей вкладке: {}", "Opened in the current tab: {}" },
+  { "Открыть по очереди {d} проектов в новых вкладках?\nREAPER будет занят, пока они загружаются (остановить можно кнопкой или Esc).",
+    "Open {d} projects one by one in new tabs?\nREAPER will be busy while they load (you can stop with the button or Esc)." },
+  { "{}: открыто {d} из {d}{}.", "{}: opened {d} of {d}{}." },
+  { ", пропавших файлов пропущено: {d}", ", missing files skipped: {d}" },
+  { "Открываю {d} из {d}: {}", "Opening {d} of {d}: {}" }, { "Показан в папке: {}", "Shown in folder: {}" },
+  { "Среди отмеченных проектов есть избранные: {d}.\nВсё равно убрать их из списка?",
+    "Some checked projects are favorites: {d}.\nRemove them from the list anyway?" },
+}
+
+do -- шаблоны -> образцы Lua
+  for _, p in ipairs(EN_PATTERNS) do
+    local pat = p[1]:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0")
+    pat = pat:gsub("{d}", "(%%d+)"):gsub("{}", "(.-)")
+    p.pat = "^" .. pat .. "$"
+  end
+end
+
+local tr_cache, tr_cache_n = {}, 0
+local function tr(s)
+  if lang ~= "en" or type(s) ~= "string" or not s:find("[\208\209]") then return s end
+  local hit = tr_cache[s]
+  if hit then return hit end
+  local out
+  if EN_EXACT[s] then
+    out = EN_EXACT[s]
+  else
+    for _, p in ipairs(EN_PATTERNS) do
+      local caps = { s:match(p.pat) }
+      if #caps > 0 then
+        local i = 0
+        out = p[2]:gsub("{d?}", function() i = i + 1; return tr(caps[i] or "") end)
+        break
+      end
+    end
+    if not out and s:find(" · ", 1, true) then -- «часть · часть»: переводится каждая часть
+      local parts = {}
+      for part in (s .. " · "):gmatch("(.-) · ") do parts[#parts + 1] = tr(part) end
+      out = table.concat(parts, " · ")
+    end
+  end
+  out = out or s
+  if tr_cache_n >= 3000 then tr_cache, tr_cache_n = {}, 0 end
+  tr_cache[s], tr_cache_n = out, tr_cache_n + 1
+  return out
+end
+
+local function set_lang(code)
+  lang = (code == "en") and "en" or "ru"
+  tr_cache, tr_cache_n = {}, 0
+  reaper.SetExtState(EXT_SECTION, "lang", lang, true)
+end
+
+-- окна REAPER с текстом: тоже на выбранном языке
+local function show_msg(msg, title, kind) return reaper.ShowMessageBox(tr(msg), title, kind) end
 
 -- Коды клавиш gfx.getchar (многобайтные значения из документации REAPER)
 local KEY = {
@@ -736,7 +880,7 @@ do
   function lib.add_folder_dialog()
     local dir
     if reaper.JS_Dialog_BrowseForFolder then
-      local rv, folder = reaper.JS_Dialog_BrowseForFolder("Папка с проектами", lib.dirs[#lib.dirs] or "")
+      local rv, folder = reaper.JS_Dialog_BrowseForFolder(tr("Папка с проектами"), lib.dirs[#lib.dirs] or "")
       if rv == 1 then dir = folder end
     else
       local ok, val = reaper.GetUserInputs("Папка с проектами", 1, "Путь к папке,extrawidth=420", "")
@@ -961,7 +1105,7 @@ local function start_open_queue(checked)
   end
   if #list == 0 then status = "Отмеченные проекты не найдены на диске - открывать нечего."; return end
   if #list >= 5 then
-    local ans = reaper.ShowMessageBox(string.format(
+    local ans = show_msg(string.format(
       "Открыть по очереди %d проектов в новых вкладках?\nREAPER будет занят, пока они загружаются (остановить можно кнопкой или Esc).", #list), TITLE, 4)
     if ans ~= 6 then status = "Открытие отменено."; return end
   end
@@ -1373,10 +1517,68 @@ end
 ----------------------------------------------------------------------
 local function set_color(c, a) gfx.set(c[1], c[2], c[3], a or 1) end
 
+-- ширина текста с учётом языка
+local function mstr(str) return gfx.measurestr(tr(str)) end
+
+----------------------------------------------------------------------
+-- Украшения (галочка в «Настройках», по умолчанию включены): градиентный фон, свечение вокруг активных элементов,
+-- эквалайзер в боковой панели. Свечение - несколько полупрозрачных контуров (настоящего размытия в gfx нет).
+-- Выключены - всё рисуется плоскими цветами, как раньше.
+----------------------------------------------------------------------
+local deco = reaper.GetExtState(EXT_SECTION, "decor") ~= "0"
+local BG_TOP, BG_BOT = { 0.030, 0.050, 0.105 }, { 0.030, 0.100, 0.250 }
+
+-- Заливка фоном; с украшениями - вертикальный градиент по высоте всего окна (полосы по 6 пикселей)
+local function fill_bg(x, y, w, h)
+  if w <= 0 or h <= 0 then return end
+  if not deco then set_color(col.bg); gfx.rect(x, y, w, h, 1); return end
+  local H = math.max(1, gfx.h)
+  local step = 6
+  local yy = math.floor(y / step) * step
+  while yy < y + h do
+    local y0, y1 = math.max(yy, y), math.min(yy + step, y + h)
+    local t = ((yy + step / 2) / H) ^ 1.6
+    gfx.set(BG_TOP[1] + (BG_BOT[1] - BG_TOP[1]) * t, BG_TOP[2] + (BG_BOT[2] - BG_TOP[2]) * t, BG_TOP[3] + (BG_BOT[3] - BG_TOP[3]) * t, 1)
+    gfx.rect(x, y0, w, y1 - y0, 1)
+    yy = yy + step
+  end
+end
+
+-- Заливка панели: плоская, а с украшениями - полупрозрачная поверх градиента
+local function fill_panel(x, y, w, h)
+  if not deco then set_color(col.panel); gfx.rect(x, y, w, h, 1); return end
+  fill_bg(x, y, w, h)
+  set_color(col.panel, 0.62); gfx.rect(x, y, w, h, 1)
+end
+
+-- Свечение вокруг прямоугольника со скруглением r; k - сила (0..1)
+local function glow(x, y, w, h, r, c, k)
+  if not deco then return end
+  for i = 1, 4 do
+    set_color(c, (k or 1) * 0.30 / i)
+    gfx.roundrect(x - i, y - i, w - 1 + 2 * i, h - 1 + 2 * i, r + i, 1)
+  end
+end
+
+-- Эквалайзер: столбики разной высоты, слегка пляшут (кадры идут постоянно, окно перерисовывается каждый раз)
+local function equalizer(x, y, w, h)
+  if not deco or h < 40 or w < 60 then return end
+  local n = math.floor((w + 4) / 10)
+  local t = reaper.time_precise()
+  for i = 1, n do
+    local env = 0.25 + 0.75 * math.sin(math.pi * (i - 0.5) / n) ^ 0.7
+    local rnd = 0.55 + 0.45 * math.abs(math.sin(i * 12.9898))
+    local bh = math.max(4, math.floor(h * env * rnd * (0.86 + 0.14 * math.sin(t * 3 + i * 0.9))))
+    local bx = x + (i - 1) * 10
+    set_color(col.accent, 0.35); gfx.rect(bx, y + h - bh, 6, bh, 1)
+    set_color(col.accent_hover, 0.9); gfx.rect(bx, y + h - bh, 6, 3, 1)
+  end
+end
+
 local function draw_text(str, x, y, c)
   set_color(c)
   gfx.x, gfx.y = x, y
-  gfx.drawstr(str)
+  gfx.drawstr(tr(str))
 end
 
 local function mouse_in(x, y, w, h)
@@ -1395,7 +1597,8 @@ end
 
 -- Обрезка слева ("…хвост пути") - имя файла в конце пути самое важное
 local function clip_tail(str, max_w)
-  if gfx.measurestr(str) <= max_w then return str end
+  str = tr(str)
+  if mstr(str) <= max_w then return str end
   local key = "t|" .. tostring(gfx.texth) .. "|" .. math.floor(max_w) .. "|" .. str
   local hit = clip_cache[key]
   if hit then return hit end
@@ -1404,14 +1607,15 @@ local function clip_tail(str, max_w)
     local ok, off = pcall(utf8.offset, s, 2)
     if not ok or not off then off = 2 end
     s = s:sub(off)
-    if gfx.measurestr("…" .. s) <= max_w then return clip_remember(key, "…" .. s) end
+    if mstr("…" .. s) <= max_w then return clip_remember(key, "…" .. s) end
   end
   return clip_remember(key, "…")
 end
 
 -- Обрезка справа ("начало…")
 local function clip_head(str, max_w)
-  if gfx.measurestr(str) <= max_w then return str end
+  str = tr(str)
+  if mstr(str) <= max_w then return str end
   local key = "h|" .. tostring(gfx.texth) .. "|" .. math.floor(max_w) .. "|" .. str
   local hit = clip_cache[key]
   if hit then return hit end
@@ -1420,7 +1624,7 @@ local function clip_head(str, max_w)
     local ok, off = pcall(utf8.offset, s, -1)
     if not ok or not off then off = #s end
     s = s:sub(1, off - 1)
-    if gfx.measurestr(s .. "…") <= max_w then return clip_remember(key, s .. "…") end
+    if mstr(s .. "…") <= max_w then return clip_remember(key, s .. "…") end
   end
   return clip_remember(key, "…")
 end
@@ -1526,16 +1730,20 @@ local function draw_button(x, y, w, h, label, enabled, click, color, fsize, ic)
   local hov = enabled and mouse_in(x, y, w, h)
   local c = (not enabled) and col.btn_off or (hov and col.btn_hover or (color or col.btn))
   if enabled and color == col.accent and hov then c = col.accent_hover end
+  if deco and enabled and color == col.accent then glow(x, y, w, h, 7, col.accent_hover, hov and 1.4 or 1) end
   rrect(x, y, w, h, 7, c)
+  if deco and enabled and color == col.accent then -- светлая полоса сверху: градиент
+    set_color(col.accent_text, 0.22); gfx.rect(x + 7, y + 2, w - 14, math.max(2, h / 2 - 2), 1)
+  end
   rframe(x, y, w, h, 7, (enabled and color) and c or col.border)
   local size = fsize or F_BTN
   gfx.setfont(1, "Arial", size)
   local avail = w - 14 - (ic and 26 or 0)
-  while size > 12 and gfx.measurestr(label) > avail do
+  while size > 12 and mstr(label) > avail do
     size = size - 1
     gfx.setfont(1, "Arial", size)
   end
-  local tw = gfx.measurestr(label)
+  local tw = mstr(label)
   local total = tw + (ic and 26 or 0)
   local tx = x + (w - total) / 2
   local fg = enabled and col.text or col.dim
@@ -1559,7 +1767,7 @@ end
 -- Выпадающее меню в точке (x, y): current - номер отмеченного пункта; -> номер выбранного или nil
 local function popup(labels, current, x, y)
   local parts = {}
-  for i, lab in ipairs(labels) do parts[i] = (i == current and "!" or "") .. lab end
+  for i, lab in ipairs(labels) do parts[i] = (i == current and "!" or "") .. tr(lab) end
   gfx.x, gfx.y = x, y
   local r = gfx.showmenu(table.concat(parts, "|"))
   if r and r > 0 then return r end
@@ -1582,7 +1790,10 @@ local function geometry(w, h)
   g.hb_w = 86
   g.hb_x0 = w - 14 - 3 * g.hb_w
   g.search_x, g.search_y, g.search_h = SIDE_W + g.pad, 24, 44
-  g.search_w = g.hb_x0 - 22 - g.search_x
+  g.lang_w, g.lang_h, g.lang_y = 34, 26, 34                  -- кнопки языка RU / EN
+  g.lang_x1 = g.hb_x0 - 12 - 2 * g.lang_w - 6
+  g.lang_x2 = g.lang_x1 + g.lang_w + 6
+  g.search_w = g.lang_x1 - 16 - g.search_x
   -- основная область: сортировка, фильтры-кнопки, заголовки колонок, список
   g.sort_y, g.sort_h = HEAD_H + 12, 36
   g.chip_y, g.chip_h = g.sort_y + g.sort_h + 10, 34
@@ -1616,9 +1827,10 @@ local function geometry(w, h)
   g.fil_dd_step, g.fil_dd_h = 40, 32
   -- подвал
   g.by, g.bh, g.gap = g.foot_y + 54, 48, 10
-  g.col_opt_y, g.col_opt_step = g.foot_y - 230, 150 -- окно «Папки»: ряд галочек «Колонки списка»; шаг по x
-  g.midi_pc_y, g.midi_ch_y = g.foot_y - 152, g.foot_y - 118 -- галочки «Fix MIDI Program Change» и «MIDI-ноты в канал 1»
-  g.close_opt_y = g.foot_y - 186                   -- окно «Папки»: галочка «Закрывать менеджер после открытия»
+  g.col_opt_y, g.col_opt_step = g.foot_y - 224, 150 -- окно «Папки»: ряд галочек «Колонки списка»; шаг по x
+  g.midi_pc_y, g.midi_ch_y = g.foot_y - 160, g.foot_y - 130 -- галочки «Fix MIDI Program Change» и «MIDI-ноты в канал 1»
+  g.close_opt_y = g.foot_y - 190                   -- окно «Папки»: галочка «Закрывать менеджер после открытия»
+  g.decor_y, g.opt1_y, g.opt2_y = g.foot_y - 100, g.foot_y - 70, g.foot_y - 40 -- «Украшения», «Пропускать Backups», «.rpp-bak»
   g.tab_w = g.rp_w - 2 * g.rp_pad
   return g
 end
@@ -1650,7 +1862,7 @@ local function draw()
   local gap = G.gap
   local side_click_y, chip_x -- где открывать выпадающие меню
 
-  set_color(col.bg); gfx.rect(0, 0, w, h, 1)
+  fill_bg(0, 0, w, h)
 
   -- клик мимо поля пометки завершает её редактирование
   if edit and click and not mouse_in(G.note_x, G.note_y, G.note_w, G.note_h) then commit_edit() end
@@ -1760,7 +1972,7 @@ local function draw()
           end
         end
       end
-      if selected then rframe(main_x, ry + 1, main_w - 16, ROW_H - 2, 6, col.accent) end
+      if selected then glow(main_x, ry + 1, main_w - 16, ROW_H - 2, 6, col.accent_hover, 1); rframe(main_x, ry + 1, main_w - 16, ROW_H - 2, 6, col.accent) end
 
       draw_checkbox(cbx, ry + (ROW_H - CB) / 2, it.checked)
       gfx.setfont(1, "Arial", F_ROW)
@@ -1775,7 +1987,7 @@ local function draw()
       if it.note ~= "" then
         gfx.setfont(1, "Arial", F_SMALL)
         local shown = clip_head(it.note, math.min(200, L.flex_w * 0.4))
-        local tw = gfx.measurestr(shown)
+        local tw = mstr(shown)
         note_tag_w = tw + 24
         local tx = L.flex_end - note_tag_w
         rrect(tx, ry + (ROW_H - 22) / 2, tw + 16, 22, 5, col.tag_bg)
@@ -1795,11 +2007,11 @@ local function draw()
         if L.show.date then draw_text(fmt_date(it.mtime), L.date_x + 4, small_y, col.dim) end
         if L.show.size then
           local sz = fmt_size(it.size)
-          draw_text(sz, L.right - 2 - gfx.measurestr(sz), small_y, col.dim)
+          draw_text(sz, L.right - 2 - mstr(sz), small_y, col.dim)
         end
       else
         local tag = "не найден"
-        draw_text(tag, L.right - 2 - gfx.measurestr(tag), small_y, col.danger)
+        draw_text(tag, L.right - 2 - mstr(tag), small_y, col.danger)
       end
     end
   end
@@ -1823,11 +2035,11 @@ local function draw()
   end
 
   -- верх и низ основной области перекрывают выступающие строки
-  set_color(col.bg); gfx.rect(main_x - 4, HEAD_H, main_w + 8, list_y - HEAD_H, 1)
-  gfx.rect(main_x - 4, list_y + list_h, main_w + 8, h - (list_y + list_h), 1)
+  fill_bg(main_x - 4, HEAD_H, main_w + 8, list_y - HEAD_H)
+  fill_bg(main_x - 4, list_y + list_h, main_w + 8, h - (list_y + list_h))
 
   -- ===== боковая панель =====
-  set_color(col.panel); gfx.rect(0, HEAD_H, G.side_w, h - HEAD_H, 1)
+  fill_panel(0, HEAD_H, G.side_w, h - HEAD_H)
   set_color(col.border); gfx.rect(G.side_w - 1, HEAD_H, 1, h - HEAD_H, 1)
   local side_click
   do
@@ -1839,14 +2051,14 @@ local function draw()
       local y = G.si_y0 + (i - 1) * G.si_step
       local active = (si.id == "folders") and show_settings or (si.id == source and not show_settings)
       local hov = mouse_in(8, y, G.side_w - 16, G.si_h)
-      if active then rrect(8, y, G.side_w - 16, G.si_h, 8, col.accent)
+      if active then glow(8, y, G.side_w - 16, G.si_h, 8, col.accent_hover, 1); rrect(8, y, G.side_w - 16, G.si_h, 8, col.accent)
       elseif hov then rrect(8, y, G.side_w - 16, G.si_h, 8, col.btn_hover) end
       local fg = active and col.text or col.dim
       icon(si.icon, 30, y + G.si_h / 2, 18, fg)
       gfx.setfont(1, "Arial", F_ROW)
       draw_text(si.label, 52, y + (G.si_h - F_ROW) / 2 - 1, active and col.text or col.text)
       local cnt = tostring(counts[si.id] or "")
-      draw_text(cnt, G.side_w - 22 - gfx.measurestr(cnt), y + (G.si_h - F_ROW) / 2 - 1, fg)
+      draw_text(cnt, G.side_w - 22 - mstr(cnt), y + (G.si_h - F_ROW) / 2 - 1, fg)
       if hov and click then side_click = si.id end
     end
 
@@ -1878,16 +2090,19 @@ local function draw()
       icon("chev", G.side_w - 26, y + G.fil_dd_h / 2, 12, col.dim)
       if hov and click then side_click = "dd_" .. dd.id; side_click_y = y + G.fil_dd_h end
     end
+    local eq_y0 = G.fil_dd_y0 + 3 * G.fil_dd_step + 10
+    equalizer(14, eq_y0, G.side_w - 28, foot_y - 12 - eq_y0)
   end
 
   -- ===== шапка =====
-  set_color(col.bg); gfx.rect(0, 0, w, HEAD_H, 1)
+  fill_bg(0, 0, w, HEAD_H)
   set_color(col.border); gfx.rect(0, HEAD_H - 1, w, 1, 1)
+  if deco then set_color(col.accent, 0.55); gfx.rect(0, HEAD_H - 1, w, 1, 1); set_color(col.accent, 0.18); gfx.rect(0, HEAD_H, w, 2, 1) end
   icon("folder", 36, 46, 38, col.accent)
   local n_shown = filters_active() and #view or #items
   gfx.setfont(2, "Arial", 26, "b")
   draw_text("Проекты", 70, 22, col.text)
-  local tw_title = gfx.measurestr("Проекты")
+  local tw_title = mstr("Проекты")
   draw_text(tostring(n_shown), 70 + tw_title + 14, 22, col.accent_text)
   gfx.setfont(1, "Arial", F_SMALL)
   local sub
@@ -1903,6 +2118,7 @@ local function draw()
   do
     local sx, sw, sy, sh = G.search_x, G.search_w, G.search_y, G.search_h
     rrect(sx, sy, sw, sh, 9, col.panel)
+    glow(sx, sy, sw, sh, 9, col.accent, query ~= "" and 1.2 or 0.7)
     rframe(sx, sy, sw, sh, 9, query ~= "" and col.accent or col.border)
     icon("search", sx + 24, sy + sh / 2, 18, col.dim)
     gfx.setfont(1, "Arial", F_ROW)
@@ -1921,7 +2137,7 @@ local function draw()
     end
     if not edit and math.floor(reaper.time_precise() * 2) % 2 == 0 then -- мигающий курсор
       set_color(col.text)
-      gfx.rect(sx + 48 + gfx.measurestr(shown) + 1, sy + 10, 1, sh - 20, 1)
+      gfx.rect(sx + 48 + mstr(shown) + 1, sy + 10, 1, sh - 20, 1)
     end
   end
 
@@ -1940,10 +2156,25 @@ local function draw()
       local fg = b.active and col.accent_text or col.text
       icon(b.ic, x + G.hb_w / 2, 36, 22, fg)
       gfx.setfont(1, "Arial", F_SMALL)
-      draw_text(b.label, x + (G.hb_w - gfx.measurestr(b.label)) / 2, 56, fg)
+      draw_text(b.label, x + (G.hb_w - mstr(b.label)) / 2, 56, fg)
       if i > 1 then set_color(col.border); gfx.rect(x, 22, 1, 46, 1) end
       if hov and click then head_click = b.id end
     end
+  end
+
+  -- кнопки языка: RU / EN (переключается на лету)
+  local lang_click
+  for i, code in ipairs({ "ru", "en" }) do
+    local x = (i == 1) and G.lang_x1 or G.lang_x2
+    local on = (lang == code)
+    local hov = mouse_in(x, G.lang_y, G.lang_w, G.lang_h)
+    if on then glow(x, G.lang_y, G.lang_w, G.lang_h, 6, col.accent_hover, 0.9) end
+    rrect(x, G.lang_y, G.lang_w, G.lang_h, 6, on and col.accent or (hov and col.btn_hover or col.btn))
+    rframe(x, G.lang_y, G.lang_w, G.lang_h, 6, on and col.accent or col.border)
+    gfx.setfont(1, "Arial", 14)
+    local label = code:upper()
+    draw_text(label, x + (G.lang_w - mstr(label)) / 2, G.lang_y + (G.lang_h - 14) / 2 - 1, on and col.text or col.dim)
+    if hov and click then lang_click = code end
   end
 
   -- ===== основная область: сортировка =====
@@ -1959,16 +2190,17 @@ local function draw()
       local x = main_x + (i - 1) * (bw2 + sgap)
       local hov = enabled and mouse_in(x, G.sort_y, bw2, G.sort_h)
       local c = (not enabled) and col.btn_off or (active and col.accent or (hov and col.btn_hover or col.btn))
+      if active then glow(x, G.sort_y, bw2, G.sort_h, 8, col.accent_hover, 1) end
       rrect(x, G.sort_y, bw2, G.sort_h, 8, c)
       rframe(x, G.sort_y, bw2, G.sort_h, 8, active and col.accent or col.border)
       local size = F_SORT
       gfx.setfont(1, "Arial", size)
-      while size > 11 and gfx.measurestr(label) > bw2 - 40 do
+      while size > 11 and mstr(label) > bw2 - 40 do
         size = size - 1
         gfx.setfont(1, "Arial", size)
       end
       local fg = enabled and col.text or col.dim
-      local tw = gfx.measurestr(label)
+      local tw = mstr(label)
       local tx = x + (bw2 - tw - 22) / 2
       draw_text(label, tx, G.sort_y + (G.sort_h - size) / 2 - 1, fg)
       if active and (sk.key ~= "order" or sort_desc) then
@@ -2022,7 +2254,7 @@ local function draw()
   do
     local all_checked = #view > 0
     for _, it in ipairs(view) do if not it.checked then all_checked = false; break end end
-    set_color(col.panel); gfx.rect(main_x, G.cols_y, main_w, COLS_H, 1)
+    fill_panel(main_x, G.cols_y, main_w, COLS_H)
     set_color(col.border); gfx.rect(main_x, list_y - 1, main_w, 1, 1)
     draw_checkbox(cbx, G.cols_y + (COLS_H - CB) / 2, all_checked)
     if click and not show_settings and mouse_in(cbx - 2, G.cols_y, CB + 4, COLS_H) then
@@ -2037,12 +2269,12 @@ local function draw()
     if L.show.name then
       draw_text("Имя", L.name_x + 4, hy, col.dim)
       if sort_key == "name" then
-        icon(sort_desc and "tri_down" or "tri_up", L.name_x + 4 + gfx.measurestr("Имя") + 14, G.cols_y + COLS_H / 2, 14, col.accent_text)
+        icon(sort_desc and "tri_down" or "tri_up", L.name_x + 4 + mstr("Имя") + 14, G.cols_y + COLS_H / 2, 14, col.accent_text)
       end
     end
     if L.show.path then draw_text("Путь", L.path_x + 4, hy, col.dim) end
     if L.show.date then draw_text("Дата", L.date_x + 4, hy, col.dim) end
-    if L.show.size then draw_text("Размер", L.right - 2 - gfx.measurestr("Размер"), hy, col.dim) end
+    if L.show.size then draw_text("Размер", L.right - 2 - mstr("Размер"), hy, col.dim) end
     for _, dv in ipairs(divs) do
       local hot = (col_drag and col_drag.kind == dv.kind) or (not col_drag and mouse_in(dv.x - 4, G.cols_y, 9, COLS_H))
       set_color(hot and col.accent or col.border)
@@ -2054,7 +2286,7 @@ local function draw()
   local act_fav, act_note, act_reveal, act_popen, act_ptab
   do
     local px, pw = G.rp_x + G.rp_pad, G.rp_w - 2 * G.rp_pad
-    set_color(col.panel); gfx.rect(G.rp_x, HEAD_H, G.rp_w, foot_y - HEAD_H, 1)
+    fill_panel(G.rp_x, HEAD_H, G.rp_w, foot_y - HEAD_H)
     set_color(col.border); gfx.rect(G.rp_x, HEAD_H, 1, foot_y - HEAD_H, 1)
     local it = cursor
     if it ~= rp_cursor then rp_cursor, rp_scroll = it, 0 end
@@ -2127,7 +2359,7 @@ local function draw()
           if not tr then break end
           local ry = G.rp_tr_y0 + (k - 1) * G.rp_row_h
           local num = tostring(idx)
-          draw_text(num, px + 26 - gfx.measurestr(num), ry + 3, col.dim)
+          draw_text(num, px + 26 - mstr(num), ry + 3, col.dim)
           local shown = tr.name ~= "" and tr.name or ("Дорожка " .. idx)
           local indent = math.min(tr.level, 6) * 10
           draw_text(clip_head(shown, pw - 44 - indent), px + 36 + indent, ry + 3, tr.name ~= "" and col.text or col.dim)
@@ -2144,7 +2376,7 @@ local function draw()
             local lines, cur = {}, ""
             for _, nm in ipairs(inf.fx_names) do
               local cand = cur == "" and nm or (cur .. ", " .. nm)
-              if cur ~= "" and gfx.measurestr(cand .. ",") > pw then
+              if cur ~= "" and mstr(cand .. ",") > pw then
                 lines[#lines + 1] = cur .. ","
                 cur = nm
               else
@@ -2172,11 +2404,11 @@ local function draw()
         draw_text(shown, note_x + 10, ty, col.text)
         if math.floor(reaper.time_precise() * 2) % 2 == 0 then
           set_color(col.text)
-          gfx.rect(note_x + 10 + gfx.measurestr(shown) + 1, note_y + 5, 1, note_h - 10, 1)
+          gfx.rect(note_x + 10 + mstr(shown) + 1, note_y + 5, 1, note_h - 10, 1)
         end
       elseif it.note ~= "" then
         local shown = clip_head(it.note, note_w - 34)
-        local tw = gfx.measurestr(shown)
+        local tw = mstr(shown)
         rrect(note_x + 6, note_y + 4, tw + 16, note_h - 8, 5, col.tag_bg)
         draw_text(shown, note_x + 14, ty, col.tag)
       else
@@ -2196,9 +2428,9 @@ local function draw()
   end
 
   -- ===== окно «Папки»: закрывает список и панель проекта =====
-  local rm_dir, opt_click, col_click, close_click, midi_click
+  local rm_dir, opt_click, col_click, close_click, midi_click, decor_click
   if show_settings then
-    set_color(col.bg); gfx.rect(G.side_w, HEAD_H, w - G.side_w, foot_y - HEAD_H, 1)
+    fill_bg(G.side_w, HEAD_H, w - G.side_w, foot_y - HEAD_H)
     gfx.setfont(2, "Arial", F_TITLE, "b")
     draw_text("Папки для поиска проектов", main_x, HEAD_H + 14, col.text)
     gfx.setfont(1, "Arial", F_SMALL)
@@ -2209,7 +2441,7 @@ local function draw()
     end
     for i, d in ipairs(lib.dirs) do
       local ry = SET_ROW_Y0 + (i - 1) * SET_ROW_H
-      if ry + SET_ROW_H > foot_y - 252 then break end
+      if ry + SET_ROW_H > foot_y - 250 then break end
       if i % 2 == 0 then set_color(col.row_alt); gfx.rect(main_x, ry, main_w, SET_ROW_H, 1) end
       gfx.setfont(1, "Arial", F_ROW)
       draw_text(clip_tail(d, main_w - 32 - 110), main_x + 8, ry + (SET_ROW_H - F_ROW) / 2 - 1, col.text)
@@ -2239,9 +2471,12 @@ local function draw()
     draw_checkbox(main_x + 4, G.midi_ch_y + 4, fix_midi_ch)
     draw_text("MIDI-ноты в канал 1: при открытии проекта переводить все MIDI-ноты в первый канал", main_x + 36, G.midi_ch_y + 5, col.text)
     if click and mouse_in(main_x, G.midi_ch_y, main_w, 28) then midi_click = "fix_midi_ch" end
+    draw_checkbox(main_x + 4, G.decor_y + 4, deco)
+    draw_text("Украшения интерфейса (свечение, фон, эквалайзер)", main_x + 36, G.decor_y + 5, col.text)
+    if click and mouse_in(main_x, G.decor_y, main_w, 28) then decor_click = true end
     local options = {
-      { key = "skip_backups", y = foot_y - 84, label = "Пропускать папки Backups (копии и автосохранения REAPER)" },
-      { key = "with_bak", y = foot_y - 50, label = "Учитывать резервные копии .rpp-bak" },
+      { key = "skip_backups", y = G.opt1_y, label = "Пропускать папки Backups (копии и автосохранения REAPER)" },
+      { key = "with_bak", y = G.opt2_y, label = "Учитывать резервные копии .rpp-bak" },
     }
     for _, o in ipairs(options) do
       draw_checkbox(main_x + 4, o.y + 4, lib[o.key])
@@ -2252,11 +2487,11 @@ local function draw()
   end
 
   -- ===== подвал =====
-  set_color(col.bg); gfx.rect(0, foot_y, w, FOOT_H, 1)
+  fill_bg(0, foot_y, w, FOOT_H)
   set_color(col.border); gfx.rect(0, foot_y, w, 1, 1)
-  set_color(col.panel); gfx.rect(0, foot_y + 1, G.side_w, FOOT_H - 1, 1)
+  fill_panel(0, foot_y + 1, G.side_w, FOOT_H - 1)
   set_color(col.border); gfx.rect(G.side_w - 1, foot_y, 1, FOOT_H, 1)
-  set_color(col.panel); gfx.rect(G.rp_x, foot_y + 1, G.rp_w, FOOT_H - 1, 1)
+  fill_panel(G.rp_x, foot_y + 1, G.rp_w, FOOT_H - 1)
   set_color(col.border); gfx.rect(G.rp_x, foot_y, 1, FOOT_H, 1)
 
   -- «Выбрано: N (размер)» под боковой панелью
@@ -2381,7 +2616,9 @@ local function draw()
     end
   end
 
-  if col_click then
+  if lang_click then
+    set_lang(lang_click)
+  elseif col_click then
     if not toggle_col(col_click) then status = "Нужна хотя бы одна из колонок «Имя» или «Путь»." end
   elseif midi_click then
     local on
@@ -2389,6 +2626,10 @@ local function draw()
     else fix_midi_ch = not fix_midi_ch; on = fix_midi_ch end
     reaper.SetExtState(EXT_SECTION, midi_click, on and "1" or "0", true)
     status = on and "Включено: правка MIDI при открытии проектов." or "Выключено: правка MIDI при открытии проектов."
+  elseif decor_click then
+    deco = not deco
+    reaper.SetExtState(EXT_SECTION, "decor", deco and "1" or "0", true)
+    status = deco and "Украшения включены." or "Украшения выключены."
   elseif close_click then
     close_after_open = not close_after_open
     reaper.SetExtState(EXT_SECTION, "close_after_open", close_after_open and "1" or "0", true)
@@ -2434,7 +2675,7 @@ local function draw()
     end
     local go = true
     if n_fav > 0 then
-      go = reaper.ShowMessageBox(string.format(
+      go = show_msg(string.format(
         "Среди отмеченных проектов есть избранные: %d.\nВсё равно убрать их из списка?", n_fav), TITLE, 4) == 6
     end
     if go then
