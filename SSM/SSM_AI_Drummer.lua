@@ -1,5 +1,5 @@
 -- @description SSM_AI_Drummer
--- @version 1.9
+-- @version 2.0
 -- @author @ssm_metalmix
 -- @about
 --   🥁 Барабанная MIDI-партия под гитарный DI-риф: нейросеть или словарь тактов барабанщика.
@@ -10,6 +10,7 @@
 --   Скрипт - только окно: партию сочиняет движок AI Drummer (Python), ноты рифа находит модуль детектора
 --   SSM_DI_Detector. Движок и модуль не публикуются: без них скрипт не работает (путь к движку - кнопка «Путь…»).
 -- @changelog
+--   2.0 Карта барабанов GGD Modern & Massive 2: в «Карте барабанов на выходе» и в «Конвертере карт».
 --   1.9 Вкладка «Гуманизация»: применить только гуманизацию (SSM Humanizer, уровни силы и тайминга) к выделенным MIDI-item,
 --   без генерации партии. Отмена - одним шагом.
 --   1.8 Карта барабанов GGD Modern & Massive: в «Карте барабанов на выходе» и в «Конвертере карт».
@@ -64,6 +65,7 @@ local DRUM_MAPS = {
   { label = "GGD Invasion", key = "ggd_invasion" },   -- в конце: номера прежних кнопок в настройках не сдвигаются
   { label = "Counterkit", key = "counterkit" },
   { label = "GGD Modern & Massive", key = "ggd_modern_massive" },
+  { label = "GGD Modern & Massive 2", key = "ggd_modern_massive2" },
 }
 -- конвертер карт (вкладка «Конвертер карт»): из какой карты в какую переводить выделенные MIDI-item. Ключи -- карты
 -- хьюманизера (humanize.NOTE_MAPS); соответствие нот -- его convert_map, как в боте (/convert_map)
@@ -75,6 +77,7 @@ local CONVERT_MAPS = {
   { label = "Ultimate Heavy", key = "ultimate_heavy" },
   { label = "Counterkit", key = "counterkit" },    -- в конце: номера прежних кнопок в настройках не сдвигаются
   { label = "GGD Modern & Massive", key = "ggd_modern_massive" },
+  { label = "GGD Modern & Massive 2", key = "ggd_modern_massive2" },
 }
 local VIEWS = { { label = "Партия", key = "drummer" }, { label = "Конвертер карт", key = "convert" }, { label = "Гуманизация", key = "humanize" } }
 local VIEWS_W = 450          -- ширина ряда вкладок в заголовке (справа)
@@ -1425,15 +1428,16 @@ local function draw_window()
   -- карта барабанов на выходе
   gfx.setfont(1, "Arial", 15)
   draw_text("Карта барабанов на выходе:", lx, y, col.text)
-  -- семь кнопок в одну строку не помещаются по ширине колонки: две строки, 4 + остальные (порядок прежних кнопок не меняется)
-  local MROW1 = 4
-  local mrow1, mrow2 = {}, {}
-  for i, o in ipairs(DRUM_MAPS) do if i <= MROW1 then mrow1[#mrow1 + 1] = o else mrow2[#mrow2 + 1] = o end end
-  local mc = draw_chip_row(lx, y + 22, colw, 28, mrow1, S.map_idx <= MROW1 and S.map_idx or 0, left_click and not busy, not busy)
-  if mc then S.map_idx = mc; save_settings() end
-  mc = draw_chip_row(lx, y + 56, colw, 28, mrow2, S.map_idx > MROW1 and S.map_idx - MROW1 or 0, left_click and not busy, not busy)
-  if mc then S.map_idx = mc + MROW1; save_settings() end
-  y = y + 98
+  -- кнопки не помещаются по ширине колонки в одну строку: строки по три (порядок прежних кнопок не меняется)
+  local rows_n = math.ceil(#DRUM_MAPS / 3)
+  for r = 1, rows_n do
+    local row, first = {}, (r - 1) * 3
+    for i = first + 1, math.min(first + 3, #DRUM_MAPS) do row[#row + 1] = DRUM_MAPS[i] end
+    local sel = (S.map_idx > first and S.map_idx <= first + 3) and (S.map_idx - first) or 0
+    local mc = draw_chip_row(lx, y + 22 + (r - 1) * 28, colw, 24, row, sel, left_click and not busy, not busy)
+    if mc then S.map_idx = first + mc; save_settings() end
+  end
+  y = y + 22 + rows_n * 28 + 4
 
   -- движок
   gfx.setfont(1, "Arial", 13)
