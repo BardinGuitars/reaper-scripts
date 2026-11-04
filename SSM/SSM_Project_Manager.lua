@@ -1,5 +1,5 @@
 -- @description SSM_Project_Manager
--- @version 3.8
+-- @version 3.9
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
@@ -58,6 +58,7 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.9 Две галочки в «Настройках» (по умолчанию включены): после открытия проекта удалять события MIDI Program Change во всех MIDI-айтемах и переводить все MIDI-ноты в канал 1.
 --   3.8 После «Открыть» (и после открытия всех отмеченных проектов) менеджер закрывается; отключается галочкой в «Настройках» (по умолчанию включена).
 --   Колонка «Путь» по умолчанию скрыта (включается там же).
 --   3.7 В «Настройках» (окно «Папки») галочки колонок списка: Имя, Путь, Дата, Размер. Выключенная колонка не рисуется, остаток строки забирает «Путь», а если он скрыт - «Имя»;
@@ -882,6 +883,55 @@ local open_new_tab = reaper.GetExtState(EXT_SECTION, "open_new_tab") ~= "0"
 local close_after_open = reaper.GetExtState(EXT_SECTION, "close_after_open") ~= "0"
 local want_close = false
 
+-- «Fix MIDI Program Change» и «MIDI-ноты в канал 1» (галочки в «Настройках», по умолчанию включены): сразу после открытия проекта
+-- просматриваются все MIDI-айтемы открытого (текущего) проекта.
+local fix_midi_pc = reaper.GetExtState(EXT_SECTION, "fix_midi_pc") ~= "0"
+local fix_midi_ch = reaper.GetExtState(EXT_SECTION, "fix_midi_ch") ~= "0"
+
+-- -> сколько событий Program Change удалено, сколько нот переведено в канал 1
+local function fix_midi_in_project()
+  local n_pc, n_ch = 0, 0
+  if not (fix_midi_pc or fix_midi_ch) then return n_pc, n_ch end
+  reaper.Undo_BeginBlock()
+  for i = 0, reaper.CountMediaItems(0) - 1 do
+    local item = reaper.GetMediaItem(0, i)
+    for t = 0, reaper.CountTakes(item) - 1 do
+      local take = reaper.GetTake(item, t)
+      if take and reaper.TakeIsMIDI(take) then
+        local touched = false
+        local _, n_notes, n_cc = reaper.MIDI_CountEvts(take)
+        if fix_midi_pc then
+          for c = n_cc - 1, 0, -1 do -- с конца: индексы оставшихся событий не сдвигаются
+            local ok, _, _, _, chanmsg = reaper.MIDI_GetCC(take, c)
+            if ok and chanmsg == 0xC0 then
+              reaper.MIDI_DeleteCC(take, c)
+              n_pc, touched = n_pc + 1, true
+            end
+          end
+        end
+        if fix_midi_ch then
+          for k = 0, n_notes - 1 do
+            local ok, sel, muted, startppq, endppq, chan, pitch, vel = reaper.MIDI_GetNote(take, k)
+            if ok and chan ~= 0 then
+              reaper.MIDI_SetNote(take, k, sel, muted, startppq, endppq, 0, pitch, vel, true)
+              n_ch, touched = n_ch + 1, true
+            end
+          end
+        end
+        if touched then reaper.MIDI_Sort(take) end
+      end
+    end
+  end
+  reaper.Undo_EndBlock("Project Manager: fix MIDI (Program Change, канал 1)", -1)
+  if n_pc + n_ch > 0 then reaper.UpdateArrange() end
+  return n_pc, n_ch
+end
+
+local function midi_fix_note(n_pc, n_ch)
+  if n_pc + n_ch == 0 then return "" end
+  return string.format(" · MIDI: Program Change удалено %d, нот переведено в канал 1: %d", n_pc, n_ch)
+end
+
 -- Новая вкладка (действие 40859): текущий проект не трогается; "noprompt:" - без вопроса
 -- о сохранении пустой вкладки. В текущей вкладке имя без "noprompt:" - REAPER сам
 -- спросит, сохранить ли несохранённые изменения, ничего не потеряется молча.
@@ -896,6 +946,7 @@ local function open_project(it, force_tab)
     reaper.Main_openProject(it.path)
     status = "Открыт в текущей вкладке: " .. name
   end
+  status = status .. midi_fix_note(fix_midi_in_project())
   if close_after_open then want_close = true end
 end
 
@@ -934,6 +985,7 @@ local function open_queue_step()
   status = string.format("Открываю %d из %d: %s", q.i, q.total, it.path:match("([^\\/]+)$") or it.path)
   reaper.Main_OnCommand(40859, 0)
   reaper.Main_openProject("noprompt:" .. it.path)
+  fix_midi_in_project()
   q.i = q.i + 1
   if q.i > q.total then
     stop_open_queue("Готово")
@@ -1564,8 +1616,9 @@ local function geometry(w, h)
   g.fil_dd_step, g.fil_dd_h = 40, 32
   -- подвал
   g.by, g.bh, g.gap = g.foot_y + 54, 48, 10
-  g.col_opt_y, g.col_opt_step = g.foot_y - 162, 150 -- окно «Папки»: ряд галочек «Колонки списка»; шаг по x
-  g.close_opt_y = g.foot_y - 118                   -- окно «Папки»: галочка «Закрывать менеджер после открытия»
+  g.col_opt_y, g.col_opt_step = g.foot_y - 230, 150 -- окно «Папки»: ряд галочек «Колонки списка»; шаг по x
+  g.midi_pc_y, g.midi_ch_y = g.foot_y - 152, g.foot_y - 118 -- галочки «Fix MIDI Program Change» и «MIDI-ноты в канал 1»
+  g.close_opt_y = g.foot_y - 186                   -- окно «Папки»: галочка «Закрывать менеджер после открытия»
   g.tab_w = g.rp_w - 2 * g.rp_pad
   return g
 end
@@ -2143,7 +2196,7 @@ local function draw()
   end
 
   -- ===== окно «Папки»: закрывает список и панель проекта =====
-  local rm_dir, opt_click, col_click, close_click
+  local rm_dir, opt_click, col_click, close_click, midi_click
   if show_settings then
     set_color(col.bg); gfx.rect(G.side_w, HEAD_H, w - G.side_w, foot_y - HEAD_H, 1)
     gfx.setfont(2, "Arial", F_TITLE, "b")
@@ -2156,7 +2209,7 @@ local function draw()
     end
     for i, d in ipairs(lib.dirs) do
       local ry = SET_ROW_Y0 + (i - 1) * SET_ROW_H
-      if ry + SET_ROW_H > foot_y - 184 then break end
+      if ry + SET_ROW_H > foot_y - 252 then break end
       if i % 2 == 0 then set_color(col.row_alt); gfx.rect(main_x, ry, main_w, SET_ROW_H, 1) end
       gfx.setfont(1, "Arial", F_ROW)
       draw_text(clip_tail(d, main_w - 32 - 110), main_x + 8, ry + (SET_ROW_H - F_ROW) / 2 - 1, col.text)
@@ -2180,6 +2233,12 @@ local function draw()
     gfx.setfont(1, "Arial", F_ROW)
     draw_text("Закрывать менеджер после открытия проектов", main_x + 36, G.close_opt_y + 5, col.text)
     if click and mouse_in(main_x, G.close_opt_y, main_w, 28) then close_click = true end
+    draw_checkbox(main_x + 4, G.midi_pc_y + 4, fix_midi_pc)
+    draw_text("Fix MIDI Program Change: при открытии проекта удалять события Program Change во всех MIDI-айтемах", main_x + 36, G.midi_pc_y + 5, col.text)
+    if click and mouse_in(main_x, G.midi_pc_y, main_w, 28) then midi_click = "fix_midi_pc" end
+    draw_checkbox(main_x + 4, G.midi_ch_y + 4, fix_midi_ch)
+    draw_text("MIDI-ноты в канал 1: при открытии проекта переводить все MIDI-ноты в первый канал", main_x + 36, G.midi_ch_y + 5, col.text)
+    if click and mouse_in(main_x, G.midi_ch_y, main_w, 28) then midi_click = "fix_midi_ch" end
     local options = {
       { key = "skip_backups", y = foot_y - 84, label = "Пропускать папки Backups (копии и автосохранения REAPER)" },
       { key = "with_bak", y = foot_y - 50, label = "Учитывать резервные копии .rpp-bak" },
@@ -2324,6 +2383,12 @@ local function draw()
 
   if col_click then
     if not toggle_col(col_click) then status = "Нужна хотя бы одна из колонок «Имя» или «Путь»." end
+  elseif midi_click then
+    local on
+    if midi_click == "fix_midi_pc" then fix_midi_pc = not fix_midi_pc; on = fix_midi_pc
+    else fix_midi_ch = not fix_midi_ch; on = fix_midi_ch end
+    reaper.SetExtState(EXT_SECTION, midi_click, on and "1" or "0", true)
+    status = on and "Включено: правка MIDI при открытии проектов." or "Выключено: правка MIDI при открытии проектов."
   elseif close_click then
     close_after_open = not close_after_open
     reaper.SetExtState(EXT_SECTION, "close_after_open", close_after_open and "1" or "0", true)
