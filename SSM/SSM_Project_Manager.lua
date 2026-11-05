@@ -1,5 +1,5 @@
 -- @description SSM_Project_Manager
--- @version 3.10
+-- @version 3.11
 -- @author @ssm_metalmix
 -- @about
 --   🗂 Менеджер проектов: недавние (Recent projects) и все проекты из ваших
@@ -58,6 +58,7 @@
 --   📱 Telegram Channel - https://t.me/bardinssm
 --   💬 Telegram - https://t.me/ssm_metalmix
 -- @changelog
+--   3.11 «Добавить папку…»: открывается полноценное окно выбора папки Windows (проводник с адресной строкой и деревом папок, растягивается) вместо маленького дерева. Если окно не показалось - старый выбор.
 --   3.10 Украшения: градиентный фон, свечение вокруг активных элементов и главных кнопок, эквалайзер в боковой панели; отключаются галочкой в «Настройках» (по умолчанию включены).
 --   В шапке две кнопки RU / EN - язык окна переключается на лету.
 --   3.9 Две галочки в «Настройках» (по умолчанию включены): после открытия проекта удалять события MIDI Program Change во всех MIDI-айтемах и переводить все MIDI-ноты в канал 1.
@@ -877,9 +878,118 @@ do
     status = "Папка убрана из списка: " .. removed
   end
 
+  -- Выбор папки в Windows: настоящее окно выбора папки проводника (адресная строка, дерево папок, «Этот компьютер»,
+  -- окно можно растягивать), а не маленькое дерево JS_Dialog_BrowseForFolder. Окно показывает PowerShell (IFileOpenDialog
+  -- в режиме «выбрать папку»); результат кладёт в файл в UTF-8 (в консоль кириллица ломается). -> путь | nil, ok:
+  -- ok = false, если окно показать не удалось (тогда используется старое), nil и ok = true - пользователь отказался.
+  local EXPLORER_PS = [=[
+$outFile = '@OUT@'
+$startDir = '@START@'
+$title = '@TITLE@'
+try {
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class SsmFolderPick {
+  [ComImport, Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")] class FileOpenDialogCom { }
+  [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IShellItem {
+    void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+    void GetParent(out IShellItem ppsi);
+    void GetDisplayName(uint sigdnName, out IntPtr ppszName);
+    void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
+    void Compare(IShellItem psi, uint hint, out int piOrder);
+  }
+  [ComImport, Guid("42F85136-DB7E-439C-85F1-E4075D135FC8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IFileOpenDialog {
+    [PreserveSig] int Show(IntPtr parent);
+    void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);
+    void SetFileTypeIndex(uint iFileType);
+    void GetFileTypeIndex(out uint piFileType);
+    void Advise(IntPtr pfde, out uint pdwCookie);
+    void Unadvise(uint dwCookie);
+    void SetOptions(uint fos);
+    void GetOptions(out uint pfos);
+    void SetDefaultFolder(IShellItem psi);
+    void SetFolder(IShellItem psi);
+    void GetFolder(out IShellItem ppsi);
+    void GetCurrentSelection(out IShellItem ppsi);
+    void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+    void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);
+    void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
+    void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
+    void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
+    void GetResult(out IShellItem ppsi);
+  }
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+  static extern void SHCreateItemFromParsingName(string path, IntPtr pbc, ref Guid riid, out IShellItem item);
+  public static string Pick(string title, string start) {
+    var dlg = (IFileOpenDialog)new FileOpenDialogCom();
+    uint opts; dlg.GetOptions(out opts);
+    dlg.SetOptions(opts | 0x20 | 0x40 | 0x800); // только папки | как в файловой системе | путь должен существовать
+    dlg.SetTitle(title);
+    if (!string.IsNullOrEmpty(start) && System.IO.Directory.Exists(start)) {
+      try {
+        Guid iid = new Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE");
+        IShellItem item; SHCreateItemFromParsingName(start, IntPtr.Zero, ref iid, out item);
+        dlg.SetFolder(item);
+      } catch { }
+    }
+    if (dlg.Show(IntPtr.Zero) != 0) return null;
+    IShellItem res; dlg.GetResult(out res);
+    IntPtr p; res.GetDisplayName(0x80058000, out p); // SIGDN_FILESYSPATH
+    string path = Marshal.PtrToStringUni(p); Marshal.FreeCoTaskMem(p);
+    return path;
+  }
+}
+"@
+if ($args -contains '-Check') { exit 0 }
+$r = [SsmFolderPick]::Pick($title, $startDir)
+$enc = New-Object System.Text.UTF8Encoding($false)
+if ($r) { [System.IO.File]::WriteAllText($outFile, "OK`n" + $r, $enc) } else { [System.IO.File]::WriteAllText($outFile, "CANCEL", $enc) }
+} catch {
+  $enc = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($outFile, "ERROR`n" + $_.Exception.Message, $enc)
+}
+]=]
+
+  local function pick_folder_explorer(start)
+    local os_name = reaper.GetOS and reaper.GetOS() or ""
+    if not os_name:find("^Win") then return nil, false end
+    local tmp = os.getenv("TEMP") or os.getenv("TMP")
+    if not tmp or tmp == "" then return nil, false end
+    tmp = tmp:gsub("[\\/]+$", "")
+    local stamp = tostring(math.floor(reaper.time_precise() * 1000))
+    local ps_file, out_file = tmp .. "\\ssm_pm_pick_" .. stamp .. ".ps1", tmp .. "\\ssm_pm_pick_" .. stamp .. ".txt"
+    local function q(s) return (s:gsub("'", "''")) end -- строка в одинарных кавычках PowerShell
+    local script = EXPLORER_PS:gsub("@OUT@", function() return q(out_file) end)
+      :gsub("@START@", function() return q(start or "") end)
+      :gsub("@TITLE@", function() return q(lang == "en" and "Select the folder with projects" or "Выберите папку с проектами") end)
+    local f = io.open(ps_file, "wb")
+    if not f then return nil, false end
+    f:write("\239\187\191", script) -- UTF-8 с BOM: иначе PowerShell 5 читает кириллицу как ANSI
+    f:close()
+    os.remove(out_file)
+    -- 0 - ждать закрытия окна (REAPER на это время занят, как с любым окном выбора)
+    reaper.ExecProcess('powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "' .. ps_file .. '"', 0)
+    local r = io.open(out_file, "rb")
+    local body = r and r:read("*a") or nil
+    if r then r:close() end
+    os.remove(ps_file); os.remove(out_file)
+    if not body then return nil, false end
+    local dir = body:match("^OK\r?\n(.+)$")
+    if dir then return (dir:gsub("[\r\n]+$", "")), true end
+    if body:sub(1, 6) == "CANCEL" then return nil, true end
+    return nil, false -- ERROR: окно не показалось
+  end
+
   function lib.add_folder_dialog()
     local dir
-    if reaper.JS_Dialog_BrowseForFolder then
+    local start = lib.dirs[#lib.dirs] or ""
+    local picked, shown = pick_folder_explorer(start)
+    if shown then
+      dir = picked
+    elseif reaper.JS_Dialog_BrowseForFolder then
       local rv, folder = reaper.JS_Dialog_BrowseForFolder(tr("Папка с проектами"), lib.dirs[#lib.dirs] or "")
       if rv == 1 then dir = folder end
     else
