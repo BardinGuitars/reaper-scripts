@@ -1,5 +1,5 @@
 -- @description SSM_Labor Safety
--- @version 1.44
+-- @version 1.45
 -- @author @ssm_metalmix
 -- @about
 --   🎧 Бережём слух и сохраняем продуктивность: Labor Safety v1.0 для REAPER!
@@ -17,6 +17,7 @@
 --   ☕ Boosty - https://boosty.to/boostbg
 --   🌐 VK - https://vk.ru/ssm_metalmix
 -- @changelog
+--   1.45 Замок окна таймера (правая кнопка мыши - Lock) запоминается и после перезапуска REAPER остаётся включённым (раньше снимался при каждом запуске отсчёта).
 --   1.44 Автозапуск при старте REAPER без окна настроек: отсчёт стартует сразу с последними сохранёнными настройками. Для этого в __startup.lua
 --   (Scripts/__startup.lua) перед запуском действия ставится флаг: reaper.SetExtState("SSM_Labor_Safety", "autostart", "1", false). Обычный запуск
 --   по-прежнему открывает окно настроек.
@@ -41,6 +42,7 @@ local defaults = {
   short_break_sec  = 15,
   long_break_sec   = 120,
   show_float_timer = 1,
+  timer_locked     = 0,
   lang             = 0,
   timer_x          = 300,
   timer_y          = 200,
@@ -352,6 +354,7 @@ local function save_ini()
   out[#out + 1] = "short_break_sec="  .. tostring(settings.short_break_sec)
   out[#out + 1] = "long_break_sec="   .. tostring(settings.long_break_sec)
   out[#out + 1] = "show_float_timer=" .. tostring(settings.show_float_timer)
+  out[#out + 1] = "timer_locked="     .. tostring(settings.timer_locked)
   out[#out + 1] = "lang="             .. tostring(settings.lang)
   out[#out + 1] = "timer_x="          .. tostring(math.floor(settings.timer_x))
   out[#out + 1] = "timer_y="          .. tostring(math.floor(settings.timer_y))
@@ -393,6 +396,7 @@ safe_minutes=50
 short_break_sec=15
 long_break_sec=120
 show_float_timer=1
+timer_locked=0
 lang=1
 timer_x=300
 timer_y=200
@@ -1452,7 +1456,7 @@ local function begin_run()
   last_play_time = nil
   pause_start = nil
   rest_shown = false
-  timer_locked = false
+  timer_locked = settings.timer_locked == 1 -- замок окна таймера запоминается между запусками REAPER
   lang_dropdown_open = false
   reset_idle_state()
   if settings.show_float_timer == 1 then
@@ -1795,6 +1799,8 @@ local function draw_timer_window()
       return painted
     elseif ret == 2 then
       timer_locked = not timer_locked
+      settings.timer_locked = timer_locked and 1 or 0
+      save_ini()
     elseif ret == 3 then
       close_window_keep_running()
       return painted
