@@ -1071,6 +1071,16 @@
       <metadata>
         <description>SSM_Item_Edit_Transfer</description>
       </metadata>
+      <version name="1.1" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.1 Нарезка переносит пустые промежутки между исходными кусками
+1.0 Перенос нарезки, mute, громкости и фейдов с галочками
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Item_Edit_Transfer.lua -->
+        <source main="main" file="../SSM_Item_Edit_Transfer.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Item_Edit_Transfer.lua</source>
+      </version>
       <version name="1.0" author="@ssm_metalmix">
 <changelog>
 <![CDATA[

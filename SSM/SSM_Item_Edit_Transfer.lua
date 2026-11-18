@@ -1,13 +1,14 @@
 -- @description SSM_Item_Edit_Transfer
--- @version 1.0
+-- @version 1.1
 -- @author @ssm_metalmix
 -- @about
---   Копирует нарезку и свойства с цепочки items на один item другой дорожки.
---   Выделите подряд идущие исходные куски на одной дорожке и один целевой item
---   на другой дорожке. Длительность цели может отличаться: границы нарезки
---   переносятся пропорционально. Если «Нарезка» выключена, свойства одного
---   исходного куска копируются на весь целевой item.
+--   Копирует нарезку, включая пустые промежутки, и свойства с исходных items
+--   на один item другой дорожки. Выделите 2+ исходных куска на одной дорожке
+--   и один целевой item на другой. Длительность цели может отличаться:
+--   куски и пустоты переносятся пропорционально. Если «Нарезка» выключена,
+--   свойства первого исходного куска копируются на весь целевой item.
 -- @changelog
+--   1.1 Нарезка переносит пустые промежутки между исходными кусками
 --   1.0 Перенос нарезки, mute, громкости и фейдов с галочками
 
 local r = reaper
@@ -24,14 +25,13 @@ local function get(item, key)
 end
 
 local function get_selected()
-  local groups, tracks, all = {}, {}, {}
+  local groups, tracks = {}, {}
   for i = 0, r.CountSelectedMediaItems(0) - 1 do
     local item = r.GetSelectedMediaItem(0, i)
     local tr = r.GetMediaItem_Track(item)
     tracks[tr] = true
     groups[tr] = groups[tr] or {}
     groups[tr][#groups[tr] + 1] = item
-    all[#all + 1] = item
   end
   local trs = {}
   for tr in pairs(tracks) do trs[#trs + 1] = tr end
@@ -42,16 +42,19 @@ local function get_selected()
   end
   local src = groups[trs[1]]
   table.sort(src, function(a, b) return get(a, "D_POSITION") < get(b, "D_POSITION") end)
+  local gaps = 0
   for i = 2, #src do
     local prev_end = get(src[i - 1], "D_POSITION") + get(src[i - 1], "D_LENGTH")
-    if math.abs(get(src[i], "D_POSITION") - prev_end) > 0.001 then
-      return nil, nil, "Исходные куски должны идти подряд без промежутков."
+    local next_start = get(src[i], "D_POSITION")
+    if next_start < prev_end - 0.00001 then
+      return nil, nil, "Исходные куски перекрываются. Выделите неперекрывающиеся куски."
     end
+    if next_start > prev_end + 0.00001 then gaps = gaps + 1 end
   end
   local src_len = get(src[#src], "D_POSITION") + get(src[#src], "D_LENGTH") - get(src[1], "D_POSITION")
   local dst = groups[trs[2]][1]
   if src_len <= 0 or get(dst, "D_LENGTH") <= 0 then return nil, nil, "Не удалось определить длительность items." end
-  return src, dst, string.format("Источник: %d кусков, цель: %.3f с. Нарезка переносится пропорционально.", #src, get(dst, "D_LENGTH"))
+  return src, dst, string.format("Источник: %d кусков, пустот: %d. Перенос пропорциональный.", #src, gaps)
 end
 
 local function capture(src)
@@ -74,39 +77,62 @@ local function transfer()
   local src, dst, err = get_selected()
   if not src then r.ShowMessageBox(err, "SSM: Перенос правок", 0); return end
   local data = capture(src)
+  local props = data
   local dst_pos, dst_len = get(dst, "D_POSITION"), get(dst, "D_LENGTH")
-  local segments, fade_scale = {}, 1
+  local segments, fade_scale, gaps_to_remove = {}, 1, {}
   r.Undo_BeginBlock2(0)
   r.PreventUIRefresh(1)
   local ok, why = pcall(function()
     if checks[1] then
-      local src_total = 0
-      for _, d in ipairs(data) do src_total = src_total + d.length end
-      local scale, cut = dst_len / src_total, dst_pos
+      local src_start = get(src[1], "D_POSITION")
+      local src_end = get(src[#src], "D_POSITION") + get(src[#src], "D_LENGTH")
+      local scale, cut = dst_len / (src_end - src_start), dst_pos
       fade_scale = scale
+      local cells, cursor = {}, 0
+      for i, item in ipairs(src) do
+        local raw_start = get(item, "D_POSITION") - src_start
+        if raw_start < cursor - 0.00001 then error("Исходные куски перекрываются.") end
+        local item_start = math.max(cursor, raw_start)
+        local item_end = item_start + get(item, "D_LENGTH")
+        if item_start > cursor + 0.00001 then
+          cells[#cells + 1] = { start = cursor, finish = item_start, gap = true }
+        end
+        cells[#cells + 1] = { start = item_start, finish = item_end, source = i }
+        cursor = item_end
+      end
       segments[1] = dst
-      for i = 1, #data - 1 do
-        cut = cut + data[i].length * scale
+      for i = 1, #cells - 1 do
+        cut = dst_pos + cells[i].finish * scale
         local right = r.SplitMediaItem(segments[#segments], cut)
         if not right then error("REAPER не смог разрезать целевой item.") end
         segments[#segments + 1] = right
       end
+      for i, cell in ipairs(cells) do
+        if cell.gap then gaps_to_remove[#gaps_to_remove + 1] = segments[i]
+        else cell.item = segments[i] end
+      end
+      data = cells
     else
       segments[1] = dst
       data = { data[1] }
     end
     for i, item in ipairs(segments) do
-      local d = data[checks[1] and i or 1]
-      if checks[2] then put(item, "B_MUTE", d.mute) end
-      if checks[3] then put(item, "D_VOL", d.vol) end
-      if checks[4] then
-        put(item, "D_FADEINLEN", math.min(d.D_FADEINLEN * fade_scale, get(item, "D_LENGTH")))
-        put(item, "D_FADEOUTLEN", math.min(d.D_FADEOUTLEN * fade_scale, get(item, "D_LENGTH")))
-        put(item, "D_FADEINLEN_AUTO", d.D_FADEINLEN_AUTO)
-        put(item, "D_FADEOUTLEN_AUTO", d.D_FADEOUTLEN_AUTO)
-        put(item, "C_FADEINSHAPE", d.C_FADEINSHAPE)
-        put(item, "C_FADEOUTSHAPE", d.C_FADEOUTSHAPE)
+      if not (checks[1] and data[i].gap) then
+        local d = checks[1] and props[data[i].source] or props[1]
+        if checks[2] then put(item, "B_MUTE", d.mute) end
+        if checks[3] then put(item, "D_VOL", d.vol) end
+        if checks[4] then
+          put(item, "D_FADEINLEN", math.min(d.D_FADEINLEN * fade_scale, get(item, "D_LENGTH")))
+          put(item, "D_FADEOUTLEN", math.min(d.D_FADEOUTLEN * fade_scale, get(item, "D_LENGTH")))
+          put(item, "D_FADEINLEN_AUTO", d.D_FADEINLEN_AUTO)
+          put(item, "D_FADEOUTLEN_AUTO", d.D_FADEOUTLEN_AUTO)
+          put(item, "C_FADEINSHAPE", d.C_FADEINSHAPE)
+          put(item, "C_FADEOUTSHAPE", d.C_FADEOUTSHAPE)
+        end
       end
+    end
+    for _, item in ipairs(gaps_to_remove) do
+      if not r.DeleteTrackMediaItem(r.GetMediaItem_Track(dst), item) then error("Не удалось очистить промежуток на целевой дорожке.") end
     end
   end)
   r.PreventUIRefresh(-1)
