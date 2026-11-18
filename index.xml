@@ -1067,5 +1067,19 @@
         <source main="main" file="../SSM_Project_Manager.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Project_Manager.lua</source>
       </version>
     </reapack>
+    <reapack name="SSM_Item_Edit_Transfer.lua" type="script">
+      <metadata>
+        <description>SSM_Item_Edit_Transfer</description>
+      </metadata>
+      <version name="1.0" author="@ssm_metalmix">
+<changelog>
+<![CDATA[
+1.0 Перенос нарезки, mute, громкости и фейдов с галочками
+]]>
+</changelog>
+        <!-- Ставится в: REAPER/Scripts/SSM/SSM_Item_Edit_Transfer.lua -->
+        <source main="main" file="../SSM_Item_Edit_Transfer.lua">https://raw.githubusercontent.com/BardinGuitars/reaper-scripts/refs/heads/main/SSM/SSM_Item_Edit_Transfer.lua</source>
+      </version>
+    </reapack>
   </category>
 </index>
